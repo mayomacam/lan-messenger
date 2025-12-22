@@ -10,24 +10,43 @@ class NetworkManager:
         self.port = port
         self.callback = callback_update_ui
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_sock.bind(('0.0.0.0', self.port))
-        self.server_sock.listen(10)
+        # self.server_sock.bind removed from here, moved to start_server
         self.running = True
         threading.Thread(target=self.start_server, daemon=True).start()
 
     def start_server(self):
+        print(f"[DEBUG] Network Server starting...")
+        try:
+            self.server_sock.bind(('0.0.0.0', self.port))
+            self.server_sock.listen(10)
+            print(f"[DEBUG] Network Server LISTENING on 0.0.0.0:{self.port}")
+        except Exception as e:
+            print(f"[DEBUG] FAILED to bind port {self.port}: {e}")
+            return
+
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+                print(f"[DEBUG] Accepted connection from {addr}")
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
-            except:
-                pass
+            except OSError as e:
+                if self.running:
+                     print(f"[DEBUG] Server accept error: {e}")
+                else:
+                     # Socket closed, expected
+                     break
+            except Exception as e:
+                print(f"[DEBUG] Server accept error: {e}")
 
     def handle_client(self, client, addr):
         try:
+            print(f"[DEBUG] Handling client {addr}")
             data = client.recv(4096).decode()
-            if not data: return
+            if not data: 
+                print(f"[DEBUG] No data received from {addr}")
+                return
             
+            print(f"[DEBUG] Received data from {addr}: {data}")
             # Protocol: TYPE|ARGS...
             parts = data.split('|')
             msg_type = parts[0]
@@ -35,26 +54,16 @@ class NetworkManager:
             if msg_type == 'HELLO':
                 # HELLO|sender_username
                 sender_username = parts[1]
+                print(f"[DEBUG] Processing HELLO from {sender_username} at {addr[0]}")
                 # Notify UI to add peer
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
-                
-                # Auto-reply with own username if it's a new connection initiating hello
-                # But to avoid loops, maybe only reply if we haven't handshaked?
-                # For simplicity, let's just assume the UI handles the logic of "If I receive hello, I know this peer exists".
-                # The sender needs to know MY username too.
-                # So if this was a HELLO, I should send back a HELLO if I initiate?
-                # Let's rely on the UI to send a HELLO back if it's a new peer, or simpler:
-                # The protocol should be:
-                # A -> B: HELLO|UserA
-                # B -> A: HELLO|UserB
-                # Just handled by application logic? Or generic auto-reply?
-                # Let's just notify UI. UI can check if it knows this peer.
             
             elif msg_type == 'MSG':
                 # MSG|sender|content|id
                 sender = parts[1]
                 content = parts[2]
                 msg_id = parts[3]
+                print(f"[DEBUG] Processing MSG from {sender}: {content}")
                 timestamp = time.time()
                 self.db.cursor.execute("INSERT OR IGNORE INTO messages (id, sender, content, timestamp) VALUES (?, ?, ?, ?)",
                                           (msg_id, sender, content, timestamp))
@@ -75,30 +84,33 @@ class NetworkManager:
                 if self.callback: self.callback('DELETE', msg_id)
 
         except Exception as e:
-            print(f"Error handling chat client: {e}")
+            print(f"[DEBUG] Error handling chat client: {e}")
         finally:
             client.close()
 
     def send_hello(self, target_ip, my_username):
+        print(f"[DEBUG] Attempting to send HELLO to {target_ip}:{self.port}")
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2) # Short timeout for connection check
+                s.settimeout(5) # Increased timeout
                 s.connect((target_ip, self.port))
                 msg = f"HELLO|{my_username}"
                 s.send(msg.encode())
+                print(f"[DEBUG] HELLO sent to {target_ip}")
                 return True
         except Exception as e:
-            print(f"Failed to handshake with {target_ip}: {e}")
+            print(f"[DEBUG] Failed to handshake with {target_ip}: {e}")
             return False
 
     def send_message(self, target_ip, sender_name, content, msg_id):
+        print(f"[DEBUG] Sending MSG to {target_ip}")
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((target_ip, self.port))
                 msg = f"MSG|{sender_name}|{content}|{msg_id}"
                 s.send(msg.encode())
         except Exception as e:
-            print(f"Failed to send to {target_ip}: {e}")
+            print(f"[DEBUG] Failed to send to {target_ip}: {e}")
 
     def send_edit(self, target_ip, msg_id, new_content):
         try:
