@@ -39,7 +39,7 @@ If you cannot see other users automatically:
 
 ## Creating a Standalone Application (.exe)
 
-To convert this project into a standalone executable that works on computers without Python installed, use `PyInstaller`.
+To convert this project into a standalone executable that shows as "LAN Messenger" (not "Python"), use `PyInstaller` with version metadata.
 
 1.  **Install PyInstaller**:
     ```bash
@@ -47,15 +47,23 @@ To convert this project into a standalone executable that works on computers wit
     ```
 
 2.  **Build the Executable**:
-    Run the following command in your terminal. We use `--collect-all customtkinter` to ensure the UI library assets are included.
+    Run this command in the project directory:
 
     ```bash
-    pyinstaller --noconfirm --onedir --windowed --collect-all customtkinter --name "LAN Messenger" main.py
+    pyinstaller --noconfirm --onedir --windowed --collect-all customtkinter --icon=NONE --name "LAN Messenger" --version-file version.txt main.py
     ```
 
-    *   `--onedir`: Creates a directory (faster startup than `--onefile`).
-    *   `--windowed`: Hides the console window.
-    *   `--collect-all customtkinter`: Copies necessary fonts and images for the UI.
+    **Command Breakdown:**
+    *   `--onedir`: Creates a folder with the executable and dependencies
+    *   `--windowed`: Hides the console window
+    *   `--collect-all customtkinter`: Includes UI library assets
+    *   `--name "LAN Messenger"`: Sets the executable name
+    *   `--version-file version.txt`: Adds Windows metadata (shows proper name in Task Manager, Firewall)
 
 3.  **Run**:
     Go to the `dist/LAN Messenger/` folder and run `LAN Messenger.exe`.
+    
+    When Windows Firewall prompts you, it will show as **"LAN Messenger"** instead of "Python".
+
+4.  **Optional - Add an Icon**:
+    If you have an `.ico` file, replace `--icon=NONE` with `--icon=youricon.ico`.

@@ -25,7 +25,12 @@ class LANMessengerApp(ctk.CTk):
         self.settings = load_settings()
         
         # State
-        self.username = self.settings.get("username", "User_" + str(int(time.time()))[-4:])
+        self.username = self.settings.get("username", "")
+        
+        # Prompt for username if not set
+        if not self.username or self.username.startswith("User_"):
+            self.prompt_username()
+        
         self.db = Database()
         
         # Init Networking with Configured Ports
@@ -46,6 +51,19 @@ class LANMessengerApp(ctk.CTk):
         # Periodic Updates
         self.after(2000, self.refresh_peers)
         self.load_chat_history()
+        
+    def prompt_username(self):
+        dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
+        name = dialog.get_input()
+        if name and name.strip():
+            self.username = name.strip()
+            self.settings["username"] = self.username
+            save_settings(self.settings)
+        else:
+            # Fallback to default
+            self.username = "User_" + str(int(time.time()))[-4:]
+            self.settings["username"] = self.username
+            save_settings(self.settings)
 
     def on_network_event(self, event_type, *args):
         # Dispatch to main thread
@@ -54,8 +72,15 @@ class LANMessengerApp(ctk.CTk):
     def _handle_event(self, event_type, *args):
         if event_type == 'NEW_PEER':
             ip, name = args[0], args[1]
-            if ip not in self.peers:
-                self.peers[ip] = name
+            
+            # Check if this is a NEW peer (not just a name update)
+            is_new_peer = ip not in self.peers
+            
+            # Update peer (handles both new peer and name change)
+            self.peers[ip] = name
+            
+            # Only send HELLO back if this was a new peer
+            if is_new_peer:
                 threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
         elif event_type == 'MSG':
              self.load_chat_history()
@@ -131,10 +156,16 @@ class LANMessengerApp(ctk.CTk):
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="LAN Messenger", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
         
-        self.username_entry = ctk.CTkEntry(self.sidebar_frame, placeholder_text="Username")
+        username_frame = ctk.CTkFrame(self.sidebar_frame)
+        username_frame.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
+        
+        self.username_entry = ctk.CTkEntry(username_frame, placeholder_text="Username")
         self.username_entry.insert(0, self.username)
-        self.username_entry.grid(row=1, column=0, padx=20, pady=10)
+        self.username_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.username_entry.bind("<Return>", self.update_username)
+        
+        self.change_name_btn = ctk.CTkButton(username_frame, text="✓", width=30, command=self.update_username)
+        self.change_name_btn.pack(side="right")
         
         self.peers_label = ctk.CTkLabel(self.sidebar_frame, text="Active Peers:", anchor="w")
         self.peers_label.grid(row=2, column=0, padx=20, pady=(10, 0))
@@ -216,11 +247,17 @@ class LANMessengerApp(ctk.CTk):
         self.file_checkboxes = [] # (checkbox_widget, file_data)
 
     def update_username(self, event=None):
-        new_name = self.username_entry.get()
-        if new_name:
+        new_name = self.username_entry.get().strip()
+        if new_name and new_name != self.username:
             self.username = new_name
             self.settings["username"] = new_name
             save_settings(self.settings)
+            
+            # Notify all connected peers of name change
+            for ip in self.peers:
+                threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
+            
+            messagebox.showinfo("Username Updated", f"Your name is now: {self.username}")
             
     def refresh_peers(self):
         # Only show known peers
@@ -237,10 +274,6 @@ class LANMessengerApp(ctk.CTk):
                               command=lambda i=ip, n=name: self.browse_peer_files(i, n))
             btn.pack(side="right", padx=5)
         self.after(2000, self.refresh_peers)
-
-        self.after(2000, self.refresh_peers)
-
-
 
     def add_manual_peer(self):
         dialog = ctk.CTkToplevel(self)
@@ -266,12 +299,11 @@ class LANMessengerApp(ctk.CTk):
     def try_manual_connect(self, ip):
         success = self.network.send_hello(ip, self.username)
         if success:
-           # We wait for them to reply HELLO to show up in list, 
-           # OR we can tentatively add them as "Unknown" if we want?
-           # Better to wait for reply or add as "Requested..."
+           # We wait for them to reply HELLO to show up in list
            pass
         else:
-           messagebox.showerror("Connection Failed", f"Could not connect to {ip}")
+           # UI updates must be on main thread
+           self.after(0, lambda: messagebox.showerror("Connection Failed", f"Could not connect to {ip}"))
 
     def load_chat_history(self):
         messages = self.db.get_messages(100)

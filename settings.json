@@ -1,0 +1,5 @@
+{
+    "username": "User",
+    "tcp_chat_port": 12347,
+    "tcp_file_port": 12346
+}
