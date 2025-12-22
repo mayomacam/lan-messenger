@@ -75,31 +75,34 @@ class NetworkManager:
             parts = data.split('|')
             msg_type = parts[0]
             
-            if msg_type == 'MSG':
+            if msg_type == 'HELLO':
+                # HELLO|sender_username
+                sender_username = parts[1]
+                # Notify UI to add peer
+                if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
+                
+                # Auto-reply with own username if it's a new connection initiating hello
+                # But to avoid loops, maybe only reply if we haven't handshaked?
+                # For simplicity, let's just assume the UI handles the logic of "If I receive hello, I know this peer exists".
+                # The sender needs to know MY username too.
+                # So if this was a HELLO, I should send back a HELLO if I initiate?
+                # Let's rely on the UI to send a HELLO back if it's a new peer, or simpler:
+                # The protocol should be:
+                # A -> B: HELLO|UserA
+                # B -> A: HELLO|UserB
+                # Just handled by application logic? Or generic auto-reply?
+                # Let's just notify UI. UI can check if it knows this peer.
+            
+            elif msg_type == 'MSG':
                 # MSG|sender|content|id
                 sender = parts[1]
                 content = parts[2]
                 msg_id = parts[3]
-                # Store in DB (if not exists? or just append? Peer to Peer usually we interpret as new)
-                # But here we might receive history? No, live chat.
-                # Just insert.
-                # We need to make sure we don't re-insert if we are sender?
-                # Sender saves to own DB. Receiver saves to own DB.
-                # If we get MSG, it's from someone else.
-                # Assuming id is passed by sender to keep global ID consistent?
-                # Yes.
-                # Check duplication?
-                # For now just insert.
-                # Wait, db.add_message generates ID. 
-                # We should have db.insert_message(id, ...)
-                if len(parts) > 3:
-                   # Custom insert not in original DB class, let's just use raw query or add method.
-                   # Let's add method to DB later or use SQL here.
-                   timestamp = time.time()
-                   self.db.cursor.execute("INSERT OR IGNORE INTO messages (id, sender, content, timestamp) VALUES (?, ?, ?, ?)",
+                timestamp = time.time()
+                self.db.cursor.execute("INSERT OR IGNORE INTO messages (id, sender, content, timestamp) VALUES (?, ?, ?, ?)",
                                           (msg_id, sender, content, timestamp))
-                   self.db.conn.commit()
-                   if self.callback: self.callback(msg_id, sender, content)
+                self.db.conn.commit()
+                if self.callback: self.callback('MSG', msg_id, sender, content)
             
             elif msg_type == 'MSG_EDIT':
                 # MSG_EDIT|id|new_content
@@ -118,6 +121,18 @@ class NetworkManager:
             print(f"Error handling chat client: {e}")
         finally:
             client.close()
+
+    def send_hello(self, target_ip, my_username):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(2) # Short timeout for connection check
+                s.connect((target_ip, self.port))
+                msg = f"HELLO|{my_username}"
+                s.send(msg.encode())
+                return True
+        except Exception as e:
+            print(f"Failed to handshake with {target_ip}: {e}")
+            return False
 
     def send_message(self, target_ip, sender_name, content, msg_id):
         try:

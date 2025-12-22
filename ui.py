@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox, Menu
+import socket
 import os
 import threading
 import time
@@ -68,13 +69,18 @@ class LANMessengerApp(ctk.CTk):
         self.peers_scroll.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
         
         self.settings_btn = ctk.CTkButton(self.sidebar_frame, text="Settings", command=self.open_settings)
-        self.settings_btn.grid(row=4, column=0, padx=20, pady=20)
+        self.settings_btn.grid(row=4, column=0, padx=20, pady=(20, 10))
+        
+        self.add_peer_btn = ctk.CTkButton(self.sidebar_frame, text="Info / Connect IP", command=self.add_manual_peer)
+        self.add_peer_btn.grid(row=5, column=0, padx=20, pady=(0, 20))
         
         self.sidebar_frame.grid_rowconfigure(3, weight=1)
 
     def create_main_area(self):
         self.tabview = ctk.CTkTabview(self)
         self.tabview.grid(row=0, column=1, padx=20, pady=10, sticky="nsew")
+        
+        # ... (rest of create_main_area is same until we need to change something else)
         
         self.chat_tab = self.tabview.add("Global Chat")
         self.files_tab = self.tabview.add("Files")
@@ -144,26 +150,82 @@ class LANMessengerApp(ctk.CTk):
             save_settings(self.settings)
             
     def refresh_peers(self):
-        new_peers = self.discovery.get_peers()
-        if new_peers != self.peers:
-            self.peers = new_peers
-            # Rebuild peer list
-            for widget in self.peers_scroll.winfo_children():
-                widget.destroy()
-                
-            for ip, name in self.peers.items():
-                row = ctk.CTkFrame(self.peers_scroll)
-                row.pack(fill="x", pady=2)
-                lbl = ctk.CTkLabel(row, text=f"{name}")
-                lbl.pack(side="left", padx=5)
-                
-                btn = ctk.CTkButton(row, text="Browse", width=60, height=20, 
-                                  command=lambda i=ip, n=name: self.browse_peer_files(i, n))
-                btn.pack(side="right", padx=5)
+        # Merge discovery peers and manually known peers
+        # For now, self.discovery.peers is the source of truth for UI display?
+        # But discovery.peers is purely from UDP.
+        # We need a unified list.
+        # Let's add 'self.manual_peers' or just update 'self.peers' dictionary directly.
+        
+        discovered = self.discovery.get_peers()
+        # Merge logic:
+        # We want to keep manual peers even if they don't broadcast.
+        for ip, name in discovered.items():
+            self.peers[ip] = name
+            
+        # Rebuild peer list UI
+        # Check delta to avoid flickering?
+        # Rebuilding is fine for low count.
+        for widget in self.peers_scroll.winfo_children():
+            widget.destroy()
+            
+        for ip, name in self.peers.items():
+            row = ctk.CTkFrame(self.peers_scroll)
+            row.pack(fill="x", pady=2)
+            lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
+            lbl.pack(side="left", padx=5)
+            
+            btn = ctk.CTkButton(row, text="Browse", width=60, height=20, 
+                              command=lambda i=ip, n=name: self.browse_peer_files(i, n))
+            btn.pack(side="right", padx=5)
         self.after(2000, self.refresh_peers)
     
     def on_network_event(self, event_type, *args):
-        self.after(0, self.load_chat_history)
+        if event_type == 'NEW_PEER':
+            ip, name = args[0], args[1]
+            if ip not in self.peers:
+                self.peers[ip] = name
+                # Reply hello if we don't know them?
+                # If they said hello, they know us.
+                # If we didn't initiate, we should ensure they have our name.
+                # NetworkManager doesn't reply automatically.
+                # Let's just send a HELLO back to be sure.
+                threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
+        elif event_type == 'MSG':
+             msg_id, sender, content = args[0], args[1], args[2]
+             self.after(0, self.load_chat_history)
+        elif event_type in ['EDIT', 'DELETE']:
+             self.after(0, self.load_chat_history)
+
+    def add_manual_peer(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Connect to IP")
+        dialog.geometry("300x250")
+        dialog.transient(self)
+        
+        ctk.CTkLabel(dialog, text="My IP: " + socket.gethostbyname(socket.gethostname())).pack(pady=10)
+        
+        ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=5)
+        entry = ctk.CTkEntry(dialog)
+        entry.pack(pady=5)
+        
+        def connect():
+            ip = entry.get()
+            if ip:
+                # Send Hello
+                threading.Thread(target=self.try_manual_connect, args=(ip,)).start()
+                dialog.destroy()
+        
+        ctk.CTkButton(dialog, text="Connect", command=connect).pack(pady=20)
+
+    def try_manual_connect(self, ip):
+        success = self.network.send_hello(ip, self.username)
+        if success:
+           # We wait for them to reply HELLO to show up in list, 
+           # OR we can tentatively add them as "Unknown" if we want?
+           # Better to wait for reply or add as "Requested..."
+           pass
+        else:
+           messagebox.showerror("Connection Failed", f"Could not connect to {ip}")
 
     def load_chat_history(self):
         messages = self.db.get_messages(100)

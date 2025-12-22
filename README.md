@@ -4,13 +4,14 @@ A secure, peer-to-peer LAN messenger and file sharing application built with Pyt
 
 ## Features
 
--   **Discovery**: Automatically finds other users on the LAN.
+-   **Discovery**: Automatically finds other users on the LAN (broadcast).
+-   **Manual Connection**: Connect to devices by IP address (useful if broadcast is blocked).
 -   **Global Chat**: Real-time group chat with all active peers.
 -   **Message Actions**: Right-click messages to Edit, Delete, or Copy.
 -   **File Sharing**:
     -   Share individual files or entire folders.
     -   Browse files shared by other peers.
-    -   Download files with a progress bar (UI feedback pending, but supported in backend).
+    -   Download files with a progress bar.
 -   **Modern UI**: Dark-mode interface using `CustomTkinter`.
 
 ## Requirements
@@ -29,6 +30,13 @@ A secure, peer-to-peer LAN messenger and file sharing application built with Pyt
     ```bash
     python main.py
     ```
+
+## Manual Connection
+
+If you cannot see other users automatically:
+1.  Click **"Info / Connect IP"** in the sidebar.
+2.  Share your IP address with the other person.
+3.  Enter their IP address and click **Connect**.
 
 ## Creating a Standalone Application (.exe)
 
@@ -52,5 +60,3 @@ To convert this project into a standalone executable that works on computers wit
 
 3.  **Run**:
     Go to the `dist/LAN Messenger/` folder and run `LAN Messenger.exe`.
-
-    > **Note**: You can zip this folder and share it with others on your network. They do not need Python installed.
