@@ -299,10 +299,8 @@ class LANMessengerApp(ctk.CTk):
     def try_manual_connect(self, ip):
         success = self.network.send_hello(ip, self.username)
         if success:
-           # We wait for them to reply HELLO to show up in list
-           pass
+           self.after(0, lambda: messagebox.showinfo("Connected", f"Sent handshake to {ip}. Waiting for response..."))
         else:
-           # UI updates must be on main thread
            self.after(0, lambda: messagebox.showerror("Connection Failed", f"Could not connect to {ip}"))
 
     def load_chat_history(self):
@@ -375,16 +373,28 @@ class LANMessengerApp(ctk.CTk):
             filename = os.path.basename(path)
             size = os.path.getsize(path)
             self.db.add_file(filename, path, size, "127.0.0.1", is_folder=False)
-            if self.current_file_view_source == "Local":
-                self.refresh_files_view()
+            self.current_file_view_source = "Local"
+            self.source_label.configure(text="Viewing: Local Shared Files")
+            self.refresh_files_view()
+
+    def get_folder_size(self, path):
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                if not os.path.islink(fp):
+                    total_size += os.path.getsize(fp)
+        return total_size
 
     def share_folder(self):
         path = filedialog.askdirectory()
         if path:
             dirname = os.path.basename(path)
-            self.db.add_file(dirname, path, 0, "127.0.0.1", is_folder=True)
-            if self.current_file_view_source == "Local":
-                self.refresh_files_view()
+            size = self.get_folder_size(path)
+            self.db.add_file(dirname, path, size, "127.0.0.1", is_folder=True)
+            self.current_file_view_source = "Local"
+            self.source_label.configure(text="Viewing: Local Shared Files")
+            self.refresh_files_view()
 
     def browse_peer_files(self, ip, name):
         self.current_file_view_source = ip
@@ -406,6 +416,9 @@ class LANMessengerApp(ctk.CTk):
 
     def fetch_peer_files(self, ip):
         file_list = self.file_manager.get_shared_files(ip)
+        if not file_list and self.current_file_view_source == ip:
+             self.after(0, lambda: messagebox.showerror("Error", f"Could not fetch file list from {ip}"))
+             
         if self.current_file_view_source == ip:
             self.after(0, lambda: self.render_file_list(file_list))
 
