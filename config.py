@@ -3,10 +3,8 @@ import os
 
 DEFAULT_SETTINGS = {
     "username": "User",
-    "broadcast_port": 12345,
     "tcp_chat_port": 12347,
-    "tcp_file_port": 12346,
-    "broadcast_ip": "<broadcast>"
+    "tcp_file_port": 12346
 }
 
 SETTINGS_FILE = "settings.json"

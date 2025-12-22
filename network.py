@@ -4,49 +4,6 @@ import json
 import time
 from constants import UDP_BROADCAST_PORT, TCP_CHAT_PORT, BROADCAST_IP, BUFFER_SIZE
 
-class PeerDiscovery:
-    def __init__(self, username, broadcast_port, broadcast_ip='<broadcast>'):
-        self.username = username
-        self.broadcast_port = broadcast_port
-        self.broadcast_ip = broadcast_ip
-        self.peers = {} # ip -> username
-        self.running = True
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self.sock.bind(('', self.broadcast_port))
-        
-        threading.Thread(target=self.broadcast_loop, daemon=True).start()
-        threading.Thread(target=self.listen_loop, daemon=True).start()
-
-    def broadcast_loop(self):
-        while self.running:
-            msg = f"IAM:{self.username}"
-            try:
-                self.sock.sendto(msg.encode(), (self.broadcast_ip, self.broadcast_port))
-            except Exception as e:
-                pass
-            time.sleep(5)
-
-    def listen_loop(self):
-        while self.running:
-            try:
-                data, addr = self.sock.recvfrom(1024)
-                msg = data.decode()
-                if msg.startswith("IAM:"):
-                    username = msg.split(":", 1)[1]
-                    if addr[0] not in self.peers:
-                        self.peers[addr[0]] = username
-                        # print(f"Discovered {username} at {addr[0]}")
-            except:
-                pass
-
-    def get_peers(self):
-        return self.peers
-    
-    def stop(self):
-        self.running = False
-        self.sock.close()
-
 class NetworkManager:
     def __init__(self, db, port, callback_update_ui=None):
         self.db = db

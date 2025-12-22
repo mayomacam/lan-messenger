@@ -4,9 +4,8 @@ A secure, peer-to-peer LAN messenger and file sharing application built with Pyt
 
 ## Features
 
--   **Discovery**: Automatically finds other users on the LAN (broadcast).
--   **Manual Connection**: Connect to devices by IP address (useful if broadcast is blocked).
--   **Global Chat**: Real-time group chat with all active peers.
+-   **Manual Connection**: Connect to devices by IP address.
+-   **Global Chat**: Real-time group chat with connected peers.
 -   **Message Actions**: Right-click messages to Edit, Delete, or Copy.
 -   **File Sharing**:
     -   Share individual files or entire folders.
