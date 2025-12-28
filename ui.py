@@ -34,8 +34,21 @@ class LANMessengerApp(ctk.CTk):
         self.db = Database()
         
         # Init Networking with Configured Ports
-        self.file_manager = FileTransferManager(self.db, port=self.settings["tcp_file_port"])
-        self.network = NetworkManager(self.db, port=self.settings["tcp_chat_port"], callback_update_ui=self.on_network_event)
+        # Initialize managers with security configuration from settings
+        self.file_manager = FileTransferManager(
+            self.db,
+            port=self.settings["tcp_file_port"],
+            bind_ip=self.settings.get("bind_ip", "0.0.0.0"),
+            auth_token=self.settings.get("auth_token") or None,
+            allowed_ips=self.settings.get("allowed_ips") or None,
+        )
+        self.network = NetworkManager(
+            self.db,
+            port=self.settings["tcp_chat_port"],
+            callback_update_ui=self.on_network_event,
+            auth_token=self.settings.get("auth_token") or None,
+            allowed_ips=self.settings.get("allowed_ips") or None,
+        )
         
         self.peers = {} # ip -> username
         self.current_file_view_source = "Local" # "Local" or IP
@@ -243,7 +256,24 @@ class LANMessengerApp(ctk.CTk):
 
         self.files_scroll = ctk.CTkScrollableFrame(self.files_tab, label_text="Files")
         self.files_scroll.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
-        
+
+        # -- Progress UI --
+        self.progress_frame = ctk.CTkFrame(self.files_tab)
+        self.progress_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
+        self.progress_frame.grid_columnconfigure(0, weight=1)
+
+        self.progress_overall_lbl = ctk.CTkLabel(self.progress_frame, text="Overall Progress:", font=("Arial", 11))
+        self.progress_overall_lbl.grid(row=0, column=0, padx=5, sticky="w")
+        self.overall_progress = ctk.CTkProgressBar(self.progress_frame)
+        self.overall_progress.grid(row=1, column=0, padx=5, pady=(0, 5), sticky="ew")
+        self.overall_progress.set(0)
+
+        self.progress_file_lbl = ctk.CTkLabel(self.progress_frame, text="Current File: Idle", font=("Arial", 11))
+        self.progress_file_lbl.grid(row=2, column=0, padx=5, sticky="w")
+        self.file_progress = ctk.CTkProgressBar(self.progress_frame)
+        self.file_progress.grid(row=3, column=0, padx=5, pady=(0, 5), sticky="ew")
+        self.file_progress.set(0)
+
         self.file_checkboxes = [] # (checkbox_widget, file_data)
 
     def update_username(self, event=None):
@@ -440,13 +470,45 @@ class LANMessengerApp(ctk.CTk):
     def download_selected(self):
         if self.current_file_view_source == "Local": return
         target_ip = self.current_file_view_source
-        count = 0
-        for var, f in self.file_checkboxes:
-            if var.get() == 1:
-                count += 1
-                threading.Thread(target=self.start_download, args=(target_ip, f['path'], f.get('is_folder'))).start()
-        if count > 0:
-            messagebox.showinfo("Download", f"Started downloading {count} items.")
+        
+        items = [(var, f) for var, f in self.file_checkboxes if var.get() == 1]
+        if not items: return
+
+        def worker():
+            self.after(0, lambda: self.overall_progress.set(0))
+            self.after(0, lambda: self.file_progress.set(0))
+            
+            for var, f in items:
+                # We reuse the folder download even for single files if needed, 
+                # or call download_file. But download_folder is more robust now for progress.
+                if f.get('is_folder'):
+                    self.file_manager.download_folder(target_ip, f['path'], progress_callback=self._download_progress)
+                else:
+                    # For a single file, we wrap it in a mock folder download report logic if we want to share the same UI
+                    # Or just call download_file. Let's make it consistent.
+                    self.file_manager.download_file(target_ip, f['path'])
+                    self.after(0, lambda p=f['filename']: self.progress_file_lbl.configure(text=f"Downloaded {p}"))
+            
+            self.after(0, lambda: messagebox.showinfo("Download", "All selected items processed."))
+            self.after(0, lambda: self.progress_file_lbl.configure(text="Idle"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _download_progress(self, rel_path, status, file_ratio, overall_ratio):
+        """Thread‑safe callback from FileTransferManager to update UI progress bars."""
+        def update():
+            if status == "START":
+                self.progress_file_lbl.configure(text=f"Downloading: {rel_path}")
+                self.file_progress.set(0)
+            elif status == "PROGRESS":
+                self.file_progress.set(file_ratio)
+            elif status in ("DONE", "ERROR"):
+                self.file_progress.set(1.0 if status == "DONE" else 0)
+                self.progress_file_lbl.configure(text=f"{'Finished' if status=='DONE' else 'Failed'}: {rel_path}")
+            
+            self.overall_progress.set(overall_ratio)
+
+        self.after(0, update)
 
     def start_download(self, ip, path, is_folder):
         if is_folder:

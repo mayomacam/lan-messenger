@@ -2,12 +2,26 @@ import socket
 import threading
 import json
 import time
+import ssl
+from pathlib import Path
+
+# TLS helper – wrap a raw socket with our self‑signed cert/key
+def _wrap_socket(sock: socket.socket, server_side: bool = False) -> ssl.SSLSocket:
+    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH if server_side else ssl.Purpose.SERVER_AUTH)
+    ctx.load_cert_chain(certfile=str(Path(__file__).parent / "tls_cert.pem"),
+                        keyfile=str(Path(__file__).parent / "tls_key.pem"))
+    if not server_side:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx.wrap_socket(sock, server_side=server_side)
 
 class NetworkManager:
-    def __init__(self, db, port, callback_update_ui=None):
+    def __init__(self, db, port, callback_update_ui=None, auth_token=None, allowed_ips=None):
         self.db = db
         self.port = port
         self.callback = callback_update_ui
+        self.auth_token = auth_token
+        self.allowed_ips = allowed_ips
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.running = True
@@ -26,7 +40,8 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
-                print(f"[DEBUG] Accepted connection from {addr}")
+                # Wrap with TLS
+                client = _wrap_socket(client, server_side=True)
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except OSError as e:
                 if self.running:
@@ -37,8 +52,15 @@ class NetworkManager:
                 print(f"[DEBUG] Server accept error: {e}")
 
     def handle_client(self, client, addr):
+        """Process incoming client packets with optional IP whitelist and token verification."""
         try:
             client.settimeout(10)
+            # IP whitelist enforcement
+            if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
+                print(f"[DEBUG] Connection from {addr[0]} rejected: IP not allowed.")
+                client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())
+                return
+
             data_raw = client.recv(8192).decode()
             if not data_raw: 
                 return
@@ -50,6 +72,14 @@ class NetworkManager:
                 print(f"[DEBUG] Failed to decode JSON from {addr}")
                 return
 
+            # Token verification
+            if self.auth_token is not None:
+                if data.get('token') != self.auth_token:
+                    print(f"[DEBUG] Connection from {addr[0]} rejected: Authentication failed.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Authentication failed'}).encode())
+                    return
+
+            # Existing message handling unchanged – keep as is
             msg_type = data.get('type')
             
             if msg_type == 'HELLO':
@@ -75,16 +105,22 @@ class NetworkManager:
                 self.db.delete_message(msg_id)
                 if self.callback: self.callback('DELETE', msg_id)
 
+            # Additional packet types can be added here
+
         except Exception as e:
             print(f"[DEBUG] Error handling chat client: {e}")
         finally:
             client.close()
 
     def _send_packet(self, target_ip, packet):
+        """Send a JSON packet to target_ip, attaching auth token if configured."""
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(5)
-                s.connect((target_ip, self.port))
+            if self.auth_token is not None:
+                packet['token'] = self.auth_token
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
+                raw.settimeout(5)
+                raw.connect((target_ip, self.port))
+                s = _wrap_socket(raw)
                 s.sendall(json.dumps(packet).encode())
                 return True
         except Exception as e:

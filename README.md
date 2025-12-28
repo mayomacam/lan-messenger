@@ -4,19 +4,26 @@ A secure, peer-to-peer LAN messenger and file sharing application built with Pyt
 
 ## Features
 
+-   **Automatic Peer Discovery**: Real-time group chat with connected peers.
 -   **Manual Connection**: Connect to devices by IP address.
--   **Global Chat**: Real-time group chat with connected peers.
--   **Message Actions**: Right-click messages to Edit, Delete, or Copy.
--   **File Sharing**:
+-   **Message Actions**: Right-click messages to Copy, Edit, or Delete (updates/deletes for all peers).
+-   **Advanced File Sharing**:
     -   Share individual files or entire folders.
     -   Browse files shared by other peers.
-    -   Download files with a progress bar.
--   **Modern UI**: Dark-mode interface using `CustomTkinter`.
+    -   **Cross-Platform Compatibility**: Robust folder transfer between Windows and Linux.
+    -   **Rich Progress Reporting**: Dual progress bars (Overall & Per-File) with non-freezing UI.
+-   **Enterprise Security**:
+    -   **End-to-End TLS Encryption**: All traffic (chat and files) is encrypted using TLS.
+    -   **Simple Token Authentication**: Secure your connection with a shared secret.
+    -   **IP Whitelisting**: Restrict access to specific trusted devices.
+    -   **Configurable Interface**: Bind the server to a specific IP or interface.
+-   **Modern UI**: High-performance dark-mode interface using `CustomTkinter`.
 
 ## Requirements
 
 -   Python 3.8+
 -   `customtkinter`
+-   `openssl` (for TLS certificate generation)
 
 ## Installation & Running (Source)
 
@@ -29,6 +36,16 @@ A secure, peer-to-peer LAN messenger and file sharing application built with Pyt
     ```bash
     python main.py
     ```
+
+## Security & TLS Setup
+
+LAN Messenger uses TLS to encrypt all network traffic. On the first run, the application will attempt to generate a self-signed certificate (`tls_cert.pem` and `tls_key.pem`).
+
+If certificate generation fails automatically, you can generate them manually using OpenSSL:
+```bash
+openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout tls_key.pem -out tls_cert.pem -subj "/CN=LANMessenger"
+```
+Place these `.pem` files in the root directory of the application on all devices.
 
 ## Manual Connection
 
