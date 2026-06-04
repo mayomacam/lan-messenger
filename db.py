@@ -7,6 +7,8 @@ from typing import List, Tuple
 class Database:
     def __init__(self, db_name="lan_messenger.db"):
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
+        # Enable Write-Ahead Logging for better concurrency and write performance
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.lock = threading.Lock()
         self.create_tables()
 
@@ -23,6 +25,8 @@ class Database:
                     is_deleted BOOLEAN DEFAULT 0
                 )
             """)
+            # Index for faster message retrieval by timestamp
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
             # Files table: id, filename, path, size, owner_ip, is_folder
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
