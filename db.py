@@ -8,6 +8,9 @@ class Database:
     def __init__(self, db_name="lan_messenger.db"):
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
         self.lock = threading.Lock()
+        # Enable WAL mode for better concurrency and synchronous NORMAL for performance
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.create_tables()
 
     def create_tables(self):
@@ -23,6 +26,8 @@ class Database:
                     is_deleted BOOLEAN DEFAULT 0
                 )
             """)
+            # Index for faster retrieval of messages ordered by timestamp
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
             # Files table: id, filename, path, size, owner_ip, is_folder
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
