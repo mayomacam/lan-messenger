@@ -177,7 +177,7 @@ class LANMessengerApp(ctk.CTk):
         self.username_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.username_entry.bind("<Return>", self.update_username)
         
-        self.change_name_btn = ctk.CTkButton(username_frame, text="✓", width=30, command=self.update_username)
+        self.change_name_btn = ctk.CTkButton(username_frame, text="Set", width=50, command=self.update_username)
         self.change_name_btn.pack(side="right")
         
         self.peers_label = ctk.CTkLabel(self.sidebar_frame, text="Active Peers:", anchor="w")
