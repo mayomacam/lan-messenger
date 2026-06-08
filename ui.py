@@ -394,6 +394,11 @@ class LANMessengerApp(ctk.CTk):
         self.source_label.configure(text="Viewing: Local Shared Files")
         self.refresh_files_view()
 
+
+    def show_local_files(self):
+        self.current_file_view_source = "Local"
+        self.source_label.configure(text="Viewing: Local Shared Files")
+        self.refresh_files_view()
     def refresh_files_view(self):
         self.file_checkboxes = []
         for w in self.files_scroll.winfo_children():
