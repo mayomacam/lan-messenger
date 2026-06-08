@@ -29,8 +29,8 @@ class Database:
                     is_deleted BOOLEAN DEFAULT 0
                 )
             """)
-            # Index on timestamp for faster chat history retrieval
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
+            # Index on is_deleted and timestamp for faster chat history retrieval
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_is_deleted_timestamp ON messages(is_deleted, timestamp)")
 
             # Files table: id, filename, path, size, owner_ip, is_folder
             cursor.execute("""
