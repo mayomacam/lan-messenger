@@ -254,7 +254,7 @@ class LANMessengerApp(ctk.CTk):
         ctk.CTkLabel(dialog, text="My IP: " + socket.gethostbyname(socket.gethostname())).pack(pady=10)
         
         ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=5)
-        entry = ctk.CTkEntry(dialog, placeholder_text="192.168.x.x")
+        entry = ctk.CTkEntry(dialog, placeholder_text="192.168.1.100")
         entry.pack(pady=5)
         
         def connect():
