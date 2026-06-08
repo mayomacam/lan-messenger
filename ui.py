@@ -195,6 +195,9 @@ class LANMessengerApp(ctk.CTk):
         self.refresh_files_btn = ctk.CTkButton(self.file_source_frame, text="Refresh", width=80, command=self.refresh_files_view)
         self.refresh_files_btn.pack(side="right", padx=5)
 
+        self.my_files_btn = ctk.CTkButton(self.file_source_frame, text="My Files", width=80, command=self.show_my_files)
+        self.my_files_btn.pack(side="right", padx=5)
+
         self.files_scroll = ctk.CTkScrollableFrame(self.files_tab, label_text="Files")
         self.files_scroll.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
 
@@ -255,7 +258,7 @@ class LANMessengerApp(ctk.CTk):
         ctk.CTkLabel(dialog, text="My IP: " + socket.gethostbyname(socket.gethostname())).pack(pady=10)
         
         ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=5)
-        entry = ctk.CTkEntry(dialog)
+        entry = ctk.CTkEntry(dialog, placeholder_text="192.168.x.x")
         entry.pack(pady=5)
         
         def connect():
@@ -366,6 +369,11 @@ class LANMessengerApp(ctk.CTk):
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
+
+    def show_my_files(self):
+        self.current_file_view_source = "Local"
+        self.source_label.configure(text="Viewing: Local Shared Files")
+        self.refresh_files_view()
 
     def browse_peer_files(self, ip, name):
         self.current_file_view_source = ip
