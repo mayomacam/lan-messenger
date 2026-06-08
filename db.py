@@ -7,14 +7,20 @@ from typing import List, Tuple
 class Database:
     def __init__(self, db_name="lan_messenger.db"):
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
+        # Enable Write-Ahead Logging and set synchronous to NORMAL for optimal performance and safety
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.lock = threading.Lock()
-        # Performance Optimizations:
-        # WAL mode allows concurrent reads and faster writes
-        # NORMAL synchronous mode is safe with WAL and much faster
-        with self.lock:
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            self.conn.execute("PRAGMA synchronous=NORMAL")
+        self._enable_wal_mode()
         self.create_tables()
+
+    def _enable_wal_mode(self):
+        """Enable Write-Ahead Logging for better concurrency and performance."""
+        with self.lock:
+            # WAL mode allows concurrent reads and writes
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            # NORMAL synchronous mode is faster and still safe enough with WAL
+            self.conn.execute("PRAGMA synchronous=NORMAL")
 
     def create_tables(self):
         with self.lock:
@@ -29,9 +35,8 @@ class Database:
                     is_deleted BOOLEAN DEFAULT 0
                 )
             """)
-            # Index on is_deleted and timestamp for faster chat history retrieval
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_is_deleted_timestamp ON messages(is_deleted, timestamp)")
-
+            # Composite index for faster message retrieval by deletion status and timestamp
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_deleted_timestamp ON messages(is_deleted, timestamp)")
             # Files table: id, filename, path, size, owner_ip, is_folder
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
@@ -43,57 +48,53 @@ class Database:
                     is_folder BOOLEAN DEFAULT 0
                 )
             """)
+            # Index to speed up message retrieval ordered by timestamp
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_deleted_timestamp ON messages(is_deleted, timestamp)")
             self.conn.commit()
 
     def add_message(self, sender: str, content: str) -> str:
         msg_id = str(uuid.uuid4())
         timestamp = time.time()
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO messages (id, sender, content, timestamp) VALUES (?, ?, ?, ?)",
-                                (msg_id, sender, content, timestamp))
-            self.conn.commit()
+            # Use connection as context manager for automatic commit/rollback
+            with self.conn:
+                self.conn.execute("INSERT INTO messages (id, sender, content, timestamp) VALUES (?, ?, ?, ?)",
+                                 (msg_id, sender, content, timestamp))
         return msg_id
 
     def add_received_message(self, msg_id: str, sender: str, content: str, timestamp: float):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO messages (id, sender, content, timestamp) VALUES (?, ?, ?, ?)",
-                                (msg_id, sender, content, timestamp))
-            self.conn.commit()
+            with self.conn:
+                self.conn.execute("INSERT OR IGNORE INTO messages (id, sender, content, timestamp) VALUES (?, ?, ?, ?)",
+                                 (msg_id, sender, content, timestamp))
 
     def get_messages(self, limit=50) -> List[Tuple]:
         # Get last 'limit' messages that are not deleted
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT * FROM messages WHERE is_deleted = 0 ORDER BY timestamp DESC LIMIT ?", (limit,))
+            cursor = self.conn.execute("SELECT * FROM messages WHERE is_deleted = 0 ORDER BY timestamp DESC LIMIT ?", (limit,))
             return cursor.fetchall()[::-1]
 
     def delete_message(self, msg_id: str):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("UPDATE messages SET is_deleted = 1 WHERE id = ?", (msg_id,))
-            self.conn.commit()
+            with self.conn:
+                self.conn.execute("UPDATE messages SET is_deleted = 1 WHERE id = ?", (msg_id,))
 
     def edit_message(self, msg_id: str, new_content: str):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("UPDATE messages SET content = ? WHERE id = ?", (new_content, msg_id))
-            self.conn.commit()
+            with self.conn:
+                self.conn.execute("UPDATE messages SET content = ? WHERE id = ?", (new_content, msg_id))
         
     def add_file(self, filename: str, path: str, size: int, owner_ip: str, is_folder: bool = False) -> str:
         file_id = str(uuid.uuid4())
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO files (id, filename, path, size, owner_ip, is_folder) VALUES (?, ?, ?, ?, ?, ?)",
-                                (file_id, filename, path, size, owner_ip, is_folder))
-            self.conn.commit()
+            with self.conn:
+                self.conn.execute("INSERT INTO files (id, filename, path, size, owner_ip, is_folder) VALUES (?, ?, ?, ?, ?, ?)",
+                                 (file_id, filename, path, size, owner_ip, is_folder))
         return file_id
 
     def get_files(self) -> List[Tuple]:
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT * FROM files")
+            cursor = self.conn.execute("SELECT * FROM files")
             return cursor.fetchall()
 
     def close(self):

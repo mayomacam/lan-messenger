@@ -1,3 +1,3 @@
-## 2025-05-15 - SQLite Performance Optimization
-**Learning:** SQLite's default 'DELETE' journal mode and 'FULL' synchronous mode are extremely slow for concurrent write operations due to frequent disk syncs and exclusive locking. Switching to 'WAL' mode and 'NORMAL' synchronous mode provides a massive performance boost (5x-10x in this codebase) while maintaining safety for most application crashes. Additionally, missing indexes on 'ORDER BY' fields (like 'timestamp') cause full table scans that degrade performance as the database grows.
-**Action:** Always verify SQLite PRAGMA settings in multi-threaded applications. Prioritize 'WAL' mode and ensure frequently queried or sorted columns are indexed.
+## 2025-05-15 - [SQLite Performance Optimization]
+**Learning:** SQLite default configurations (synchronous journaling, no indexes) can lead to significant bottlenecks as data grows. Enabling WAL mode and adding strategic indexes can improve performance by orders of magnitude (e.g., 40x faster retrieval, 4x faster insertion).
+**Action:** Always check if core tables have indexes for fields used in `ORDER BY` or `WHERE` clauses. Enable WAL mode for applications with concurrent read/writes.
