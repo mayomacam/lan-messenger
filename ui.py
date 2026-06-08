@@ -115,7 +115,7 @@ class LANMessengerApp(ctk.CTk):
         self.username_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.username_entry.bind("<Return>", self.update_username)
         
-        self.change_name_btn = ctk.CTkButton(username_frame, text="Set", width=40, command=self.update_username)
+        self.change_name_btn = ctk.CTkButton(username_frame, text="Set", width=50, command=self.update_username)
         self.change_name_btn.pack(side="right")
         
         self.peers_label = ctk.CTkLabel(self.sidebar_frame, text="Active Peers:", anchor="w")
@@ -179,8 +179,11 @@ class LANMessengerApp(ctk.CTk):
         
         self.share_folder_btn = ctk.CTkButton(self.file_controls, text="Share Folder", command=self.share_folder)
         self.share_folder_btn.pack(side="left", padx=5)
+
+        self.my_files_btn = ctk.CTkButton(self.file_controls, text="My Shared Files", command=self.show_my_files)
+        self.my_files_btn.pack(side="left", padx=5)
         
-        self.download_btn = ctk.CTkButton(self.file_controls, text="Download Selected", command=self.download_selected, fg_color="green")
+        self.download_btn = ctk.CTkButton(self.file_controls, text="Download Selected", command=self.download_selected, fg_color="green", state="disabled")
         self.download_btn.pack(side="right", padx=5)
 
         self.file_source_frame = ctk.CTkFrame(self.files_tab, height=40)
@@ -193,6 +196,9 @@ class LANMessengerApp(ctk.CTk):
         self.my_files_btn.pack(side="left", padx=5)
         self.refresh_files_btn = ctk.CTkButton(self.file_source_frame, text="Refresh", width=80, command=self.refresh_files_view)
         self.refresh_files_btn.pack(side="right", padx=5)
+
+        self.my_files_btn = ctk.CTkButton(self.file_source_frame, text="My Files", width=80, command=self.show_my_files)
+        self.my_files_btn.pack(side="right", padx=5)
 
         self.files_scroll = ctk.CTkScrollableFrame(self.files_tab, label_text="Files")
         self.files_scroll.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
@@ -254,7 +260,7 @@ class LANMessengerApp(ctk.CTk):
         ctk.CTkLabel(dialog, text="My IP: " + socket.gethostbyname(socket.gethostname())).pack(pady=10)
         
         ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=5)
-        entry = ctk.CTkEntry(dialog, placeholder_text="192.168.1.100")
+        entry = ctk.CTkEntry(dialog, placeholder_text="192.168.x.x")
         entry.pack(pady=5)
         
         def connect():
@@ -366,10 +372,20 @@ class LANMessengerApp(ctk.CTk):
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
 
+    def show_my_files(self):
+        self.current_file_view_source = "Local"
+        self.source_label.configure(text="Viewing: Local Shared Files")
+        self.refresh_files_view()
+
     def browse_peer_files(self, ip, name):
         self.current_file_view_source = ip
         self.source_label.configure(text=f"Viewing: {name}'s Files")
         self.refresh_files_view()
+    def show_my_files(self):
+        self.current_file_view_source = "Local"
+        self.source_label.configure(text="Viewing: Local Shared Files")
+        self.refresh_files_view()
+
 
     def return_to_local_view(self):
         if self.current_file_view_source == "Local":
@@ -383,12 +399,14 @@ class LANMessengerApp(ctk.CTk):
         for w in self.files_scroll.winfo_children():
             w.destroy()
         if self.current_file_view_source == "Local":
+            self.download_btn.configure(state="disabled")
             files = self.db.get_files()
             file_data = []
             for f in files:
                 file_data.append({'filename': f[1], 'path': f[2], 'size': f[3], 'is_folder': f[5], 'owner': "Me"})
             self.render_file_list(file_data)
         else:
+            self.download_btn.configure(state="normal")
             threading.Thread(target=self.fetch_peer_files, args=(self.current_file_view_source,)).start()
 
     def fetch_peer_files(self, ip):
