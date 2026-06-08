@@ -38,7 +38,7 @@ class Database:
                 )
             """)
             # Index to speed up message retrieval ordered by timestamp
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_deleted_timestamp ON messages(is_deleted, timestamp)")
             self.conn.commit()
 
     def add_message(self, sender: str, content: str) -> str:
