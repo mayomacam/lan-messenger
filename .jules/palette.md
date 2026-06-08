@@ -1,7 +1,7 @@
-## 2025-05-15 - Micro-UX: Descriptive Labels over Cryptic Icons
-**Learning:** Icon-only buttons (like "✓") can be ambiguous and less accessible than clear descriptive text (like "Set"). Replacing them improves clarity with minimal code change.
-**Action:** Prioritize text labels or ARIA labels for all interactive elements, especially those that trigger critical actions like setting a username.
+## 2025-05-15 - Improving interface intuition with descriptive labels
+**Learning:** Cryptic icons like "✓" can be confusing for users. Replacing them with descriptive labels like "Set" significantly improves the immediate understanding of the button's action.
+**Action:** Always prefer clear, descriptive text over icon-only buttons, especially for primary actions.
 
-## 2025-05-15 - Technical: Byte-level Editing for UTF-8 and CRLF
-**Learning:** Using standard tools like `sed` or `replace_with_git_merge_diff` on files with UTF-8 characters (e.g., "✓") and CRLF line endings can lead to search failures or corruption.
-**Action:** Use Python scripts for binary-safe search-and-replace to ensure character encoding and line endings are preserved correctly.
+## 2025-05-15 - Navigational aids in complex views
+**Learning:** When users browse remote content (like peer files), they can feel "lost" without an easy way to return to their own local view.
+**Action:** Provide explicit navigation buttons (e.g., "My Files") to return to the application's default state.
