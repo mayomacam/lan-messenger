@@ -7,8 +7,9 @@ from typing import List, Tuple
 class Database:
     def __init__(self, db_name="lan_messenger.db"):
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
-        # Enable Write-Ahead Logging for better concurrency and write performance
+        # Enable Write-Ahead Logging and set synchronous to NORMAL for optimal performance and safety
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.lock = threading.Lock()
         self.create_tables()
 
