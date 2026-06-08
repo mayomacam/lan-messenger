@@ -26,8 +26,8 @@ class Database:
                     is_deleted BOOLEAN DEFAULT 0
                 )
             """)
-            # Index for faster retrieval of messages ordered by timestamp
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
+            # Index for faster retrieval of active messages ordered by timestamp
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_active_timestamp ON messages(timestamp DESC) WHERE is_deleted = 0")
             # Files table: id, filename, path, size, owner_ip, is_folder
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
