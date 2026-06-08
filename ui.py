@@ -372,6 +372,8 @@ class LANMessengerApp(ctk.CTk):
         self.refresh_files_view()
 
     def return_to_local_view(self):
+        if self.current_file_view_source == "Local":
+            return
         self.current_file_view_source = "Local"
         self.source_label.configure(text="Viewing: Local Shared Files")
         self.refresh_files_view()
