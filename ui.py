@@ -100,68 +100,6 @@ class LANMessengerApp(ctk.CTk):
         elif event_type in ['EDIT', 'DELETE']:
              self.load_chat_history()
 
-    # ... (rest of methods)
-
-    def update_username(self, event=None):
-        new_name = self.username_entry.get()
-        if new_name:
-            self.username = new_name
-            self.settings["username"] = new_name
-            save_settings(self.settings)
-            
-    def refresh_peers(self):
-        # Only show peers we know about (from Manual Add or HELLO)
-        
-        # Rebuild peer list UI
-        for widget in self.peers_scroll.winfo_children():
-            widget.destroy()
-            
-        for ip, name in self.peers.items():
-            row = ctk.CTkFrame(self.peers_scroll)
-            row.pack(fill="x", pady=2)
-            lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
-            lbl.pack(side="left", padx=5)
-            
-            btn = ctk.CTkButton(row, text="Browse", width=60, height=20, 
-                              command=lambda i=ip, n=name: self.browse_peer_files(i, n))
-            btn.pack(side="right", padx=5)
-        self.after(2000, self.refresh_peers)
-
-    def open_settings(self):
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Settings")
-        dialog.geometry("400x300")
-        dialog.transient(self) # Make modal-like
-        
-        ctk.CTkLabel(dialog, text="Chat Port (TCP):").pack(pady=(10, 0))
-        entry_chat = ctk.CTkEntry(dialog)
-        entry_chat.insert(0, str(self.settings["tcp_chat_port"]))
-        entry_chat.pack(pady=5)
-        
-        ctk.CTkLabel(dialog, text="File Port (TCP):").pack(pady=(10, 0))
-        entry_file = ctk.CTkEntry(dialog)
-        entry_file.insert(0, str(self.settings["tcp_file_port"]))
-        entry_file.pack(pady=5)
-        
-        def save():
-            try:
-                self.settings["tcp_chat_port"] = int(entry_chat.get())
-                self.settings["tcp_file_port"] = int(entry_file.get())
-                self.settings["username"] = self.username
-                save_settings(self.settings)
-                messagebox.showinfo("Saved", "Settings saved. Please restart the application to apply changes.")
-                dialog.destroy()
-            except ValueError:
-                messagebox.showerror("Error", "Ports must be numbers.")
-        
-        ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green").pack(pady=20)
-
-    def on_closing(self):
-        self.network.close()
-        self.file_manager.close()
-        self.db.close()
-        self.destroy()
-
     def create_sidebar(self):
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
@@ -177,7 +115,7 @@ class LANMessengerApp(ctk.CTk):
         self.username_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.username_entry.bind("<Return>", self.update_username)
         
-        self.change_name_btn = ctk.CTkButton(username_frame, text="✓", width=30, command=self.update_username)
+        self.change_name_btn = ctk.CTkButton(username_frame, text="Set", width=40, command=self.update_username)
         self.change_name_btn.pack(side="right")
         
         self.peers_label = ctk.CTkLabel(self.sidebar_frame, text="Active Peers:", anchor="w")
@@ -251,6 +189,8 @@ class LANMessengerApp(ctk.CTk):
         self.source_label = ctk.CTkLabel(self.file_source_frame, text="Viewing: Local Shared Files")
         self.source_label.pack(side="left", padx=10)
         
+        self.my_files_btn = ctk.CTkButton(self.file_source_frame, text="My Shared Files", width=120, command=self.return_to_local_view)
+        self.my_files_btn.pack(side="left", padx=5)
         self.refresh_files_btn = ctk.CTkButton(self.file_source_frame, text="Refresh", width=80, command=self.refresh_files_view)
         self.refresh_files_btn.pack(side="right", padx=5)
 
@@ -314,7 +254,7 @@ class LANMessengerApp(ctk.CTk):
         ctk.CTkLabel(dialog, text="My IP: " + socket.gethostbyname(socket.gethostname())).pack(pady=10)
         
         ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=5)
-        entry = ctk.CTkEntry(dialog)
+        entry = ctk.CTkEntry(dialog, placeholder_text="192.168.x.x")
         entry.pack(pady=5)
         
         def connect():
@@ -429,6 +369,11 @@ class LANMessengerApp(ctk.CTk):
     def browse_peer_files(self, ip, name):
         self.current_file_view_source = ip
         self.source_label.configure(text=f"Viewing: {name}'s Files")
+        self.refresh_files_view()
+
+    def return_to_local_view(self):
+        self.current_file_view_source = "Local"
+        self.source_label.configure(text="Viewing: Local Shared Files")
         self.refresh_files_view()
 
     def refresh_files_view(self):
