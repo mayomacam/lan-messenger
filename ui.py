@@ -192,6 +192,8 @@ class LANMessengerApp(ctk.CTk):
         self.source_label = ctk.CTkLabel(self.file_source_frame, text="Viewing: Local Shared Files")
         self.source_label.pack(side="left", padx=10)
         
+        self.my_files_btn = ctk.CTkButton(self.file_source_frame, text="My Shared Files", width=120, command=self.return_to_local_view)
+        self.my_files_btn.pack(side="left", padx=5)
         self.refresh_files_btn = ctk.CTkButton(self.file_source_frame, text="Refresh", width=80, command=self.refresh_files_view)
         self.refresh_files_btn.pack(side="right", padx=5)
 
@@ -384,6 +386,13 @@ class LANMessengerApp(ctk.CTk):
         self.source_label.configure(text="Viewing: Local Shared Files")
         self.refresh_files_view()
 
+
+    def return_to_local_view(self):
+        if self.current_file_view_source == "Local":
+            return
+        self.current_file_view_source = "Local"
+        self.source_label.configure(text="Viewing: Local Shared Files")
+        self.refresh_files_view()
 
     def refresh_files_view(self):
         self.file_checkboxes = []
