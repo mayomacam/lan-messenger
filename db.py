@@ -44,7 +44,7 @@ class Database:
                     )
                 """)
                 # BOLT: Added index on timestamp for faster chat history retrieval (O(log N) vs O(N))
-                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
+                self.conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_is_deleted_timestamp ON messages(is_deleted, timestamp)")
 
     def add_message(self, sender: str, content: str) -> str:
         msg_id = str(uuid.uuid4())
