@@ -29,8 +29,6 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
-                # Wrap with TLS
-                client = wrap_socket(client, server_side=True)
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except OSError as e:
                 if self.running:
