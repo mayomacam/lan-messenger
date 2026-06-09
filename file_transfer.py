@@ -3,18 +3,7 @@ import threading
 import os
 import json
 import time
-import ssl
-from pathlib import Path
-
-# TLS helper – wrap a raw socket with our self‑signed cert/key
-def _wrap_socket(sock: socket.socket, server_side: bool = False) -> ssl.SSLSocket:
-    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH if server_side else ssl.Purpose.SERVER_AUTH)
-    ctx.load_cert_chain(certfile=str(Path(__file__).parent / "tls_cert.pem"),
-                        keyfile=str(Path(__file__).parent / "tls_key.pem"))
-    if not server_side:
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    return ctx.wrap_socket(sock, server_side=server_side)
+from ssl_utils import wrap_socket
 
 class FileTransferManager:
     def __init__(self, db, port, save_dir="downloads", bind_ip="0.0.0.0", auth_token=None, allowed_ips=None):
@@ -51,7 +40,7 @@ class FileTransferManager:
             try:
                 client, addr = self.server_socket.accept()
                 # Wrap the raw socket with TLS before handing to handler
-                client = _wrap_socket(client, server_side=True)
+                client = wrap_socket(client, server_side=True)
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except Exception as e:
                 if self.running:
@@ -72,7 +61,7 @@ class FileTransferManager:
             header_raw = client.recv(4096).decode()
             if not header_raw:
                 return
-            
+
             try:
                 req = json.loads(header_raw)
             except json.JSONDecodeError:
@@ -86,13 +75,13 @@ class FileTransferManager:
                     return
                 # token matches – continue processing
             cmd = req.get('cmd')
-            
+
             if cmd == 'PUSH_FILE':
                 filename = req.get('filename')
                 size = req.get('size')
                 client.sendall(b'ACK')
                 self.receive_stream(client, filename, size)
-            
+
             elif cmd == 'PULL_FILE':
                 path = req.get('path')
                 if os.path.exists(path) and os.path.isfile(path):
@@ -106,7 +95,7 @@ class FileTransferManager:
                             client.sendall(data)
                 else:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found'}).encode())
-            
+
             elif cmd == 'LIST_SHARED':
                 files = self.db.get_files()
                 file_list = []
@@ -122,7 +111,7 @@ class FileTransferManager:
                 client.sendall(json.dumps({'status': 'OK', 'size': len(data)}).encode())
                 ack = client.recv(1024)
                 client.sendall(data.encode())
-            
+
             elif cmd == 'LIST_FOLDER':
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 from pathlib import Path
@@ -150,7 +139,7 @@ class FileTransferManager:
                     client.sendall(data.encode())
                 else:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Folder not found'}).encode())
-                    
+
         except Exception as e:
             print(f"[DEBUG] Error handling file client: {e}")
         finally:
@@ -160,7 +149,7 @@ class FileTransferManager:
         final_dir = os.path.join(self.save_dir, subfolder)
         if not os.path.exists(final_dir):
             os.makedirs(final_dir)
-            
+
         path = os.path.join(final_dir, filename)
         received = 0
         with open(path, 'wb') as f:
@@ -177,7 +166,7 @@ class FileTransferManager:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
                 raw.settimeout(10)
                 raw.connect((target_ip, self.port))
-                s = _wrap_socket(raw)
+                s = wrap_socket(raw)
                 payload = {'cmd': 'PULL_FILE', 'path': remote_path}
                 if self.auth_token is not None:
                     payload['token'] = self.auth_token
@@ -207,7 +196,7 @@ class FileTransferManager:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
                 raw.settimeout(10)
                 raw.connect((target_ip, self.port))
-                s = _wrap_socket(raw)
+                s = wrap_socket(raw)
                 payload = {'cmd': 'LIST_FOLDER', 'path': remote_path}
                 if self.auth_token is not None:
                     payload['token'] = self.auth_token
@@ -265,7 +254,7 @@ class FileTransferManager:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
                 raw.settimeout(10)
                 raw.connect((target_ip, self.port))
-                s = _wrap_socket(raw)
+                s = wrap_socket(raw)
                 payload = {'cmd': 'PULL_FILE', 'path': remote_path}
                 if self.auth_token is not None:
                     payload['token'] = self.auth_token
@@ -307,7 +296,7 @@ class FileTransferManager:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
                 raw.settimeout(5)
                 raw.connect((target_ip, self.port))
-                s = _wrap_socket(raw)
+                s = wrap_socket(raw)
                 payload = {'cmd': 'LIST_SHARED'}
                 if self.auth_token is not None:
                     payload['token'] = self.auth_token
