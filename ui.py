@@ -259,10 +259,10 @@ class LANMessengerApp(ctk.CTk):
         entry.pack(pady=5)
         
         def connect(event=None):
-            ip = entry.get()
+            ip = entry.get().strip()
             if ip:
                 # Send Hello
-                threading.Thread(target=self.try_manual_connect, args=(ip,)).start()
+                threading.Thread(target=self.try_manual_connect, args=(ip,), daemon=True).start()
                 dialog.destroy()
         
         entry.bind("<Return>", connect)
