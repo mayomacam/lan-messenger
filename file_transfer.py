@@ -39,6 +39,8 @@ class FileTransferManager:
         while self.running:
             try:
                 client, addr = self.server_socket.accept()
+                # Wrap the raw socket with TLS before handing to handler
+                client = wrap_socket(client, server_side=True)
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except Exception as e:
                 if self.running:
@@ -51,7 +53,6 @@ class FileTransferManager:
         """
         try:
             client.settimeout(10)
-            client = wrap_socket(client, server_side=True)
             # IP whitelist check
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())

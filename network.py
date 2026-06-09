@@ -29,6 +29,8 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+                # Wrap with TLS
+                client = wrap_socket(client, server_side=True)
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except OSError as e:
                 if self.running:
@@ -42,7 +44,6 @@ class NetworkManager:
         """Process incoming client packets with optional IP whitelist and token verification."""
         try:
             client.settimeout(10)
-            client = wrap_socket(client, server_side=True)
             # IP whitelist enforcement
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 print(f"[DEBUG] Connection from {addr[0]} rejected: IP not allowed.")

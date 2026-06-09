@@ -16,6 +16,14 @@ def get_ssl_context(server_side: bool) -> ssl.SSLContext:
         # In a real app, we'd want to ensure these exist or handle their absence gracefully
         if cert_file.exists() and key_file.exists():
             ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
+        else:
+            # Fallback: if certs don't exist yet (e.g. first run), try to trigger generation via config import
+            try:
+                import config
+                if cert_file.exists() and key_file.exists():
+                    ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
+            except ImportError:
+                pass
 
         if not server_side:
             ctx.check_hostname = False
