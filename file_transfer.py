@@ -39,8 +39,6 @@ class FileTransferManager:
         while self.running:
             try:
                 client, addr = self.server_socket.accept()
-                # Wrap the raw socket with TLS before handing to handler
-                client = wrap_socket(client, server_side=True)
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except Exception as e:
                 if self.running:
