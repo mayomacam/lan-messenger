@@ -51,6 +51,7 @@ class FileTransferManager:
         """
         try:
             client.settimeout(10)
+            client = wrap_socket(client, server_side=True)
             # IP whitelist check
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())
