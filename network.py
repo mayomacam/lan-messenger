@@ -42,6 +42,7 @@ class NetworkManager:
         """Process incoming client packets with optional IP whitelist and token verification."""
         try:
             client.settimeout(10)
+            client = wrap_socket(client, server_side=True)
             # IP whitelist enforcement
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 print(f"[DEBUG] Connection from {addr[0]} rejected: IP not allowed.")
