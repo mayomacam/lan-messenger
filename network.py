@@ -2,18 +2,7 @@ import socket
 import threading
 import json
 import time
-import ssl
-from pathlib import Path
-
-# TLS helper – wrap a raw socket with our self‑signed cert/key
-def _wrap_socket(sock: socket.socket, server_side: bool = False) -> ssl.SSLSocket:
-    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH if server_side else ssl.Purpose.SERVER_AUTH)
-    ctx.load_cert_chain(certfile=str(Path(__file__).parent / "tls_cert.pem"),
-                        keyfile=str(Path(__file__).parent / "tls_key.pem"))
-    if not server_side:
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    return ctx.wrap_socket(sock, server_side=server_side)
+from ssl_utils import wrap_socket
 
 class NetworkManager:
     def __init__(self, db, port, callback_update_ui=None, auth_token=None, allowed_ips=None):
@@ -41,7 +30,7 @@ class NetworkManager:
             try:
                 client, addr = self.server_sock.accept()
                 # Wrap with TLS
-                client = _wrap_socket(client, server_side=True)
+                client = wrap_socket(client, server_side=True)
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except OSError as e:
                 if self.running:
@@ -62,9 +51,9 @@ class NetworkManager:
                 return
 
             data_raw = client.recv(8192).decode()
-            if not data_raw: 
+            if not data_raw:
                 return
-            
+
             print(f"[DEBUG] Received data from {addr}: {data_raw}")
             try:
                 data = json.loads(data_raw)
@@ -81,11 +70,11 @@ class NetworkManager:
 
             # Existing message handling unchanged – keep as is
             msg_type = data.get('type')
-            
+
             if msg_type == 'HELLO':
                 sender_username = data.get('username')
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
-            
+
             elif msg_type == 'MSG':
                 sender = data.get('sender')
                 content = data.get('content')
@@ -93,7 +82,7 @@ class NetworkManager:
                 timestamp = time.time()
                 self.db.add_received_message(msg_id, sender, content, timestamp)
                 if self.callback: self.callback('MSG', msg_id, sender, content)
-            
+
             elif msg_type == 'MSG_EDIT':
                 msg_id = data.get('id')
                 new_content = data.get('content')
@@ -120,7 +109,7 @@ class NetworkManager:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
                 raw.settimeout(5)
                 raw.connect((target_ip, self.port))
-                s = _wrap_socket(raw)
+                s = wrap_socket(raw)
                 s.sendall(json.dumps(packet).encode())
                 return True
         except Exception as e:
