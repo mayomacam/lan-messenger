@@ -192,13 +192,8 @@ class LANMessengerApp(ctk.CTk):
         self.source_label = ctk.CTkLabel(self.file_source_frame, text="Viewing: Local Shared Files")
         self.source_label.pack(side="left", padx=10)
         
-        self.my_files_btn = ctk.CTkButton(self.file_source_frame, text="My Shared Files", width=120, command=self.return_to_local_view)
-        self.my_files_btn.pack(side="left", padx=5)
         self.refresh_files_btn = ctk.CTkButton(self.file_source_frame, text="Refresh", width=80, command=self.refresh_files_view)
         self.refresh_files_btn.pack(side="right", padx=5)
-
-        self.my_files_btn = ctk.CTkButton(self.file_source_frame, text="My Files", width=80, command=self.show_my_files)
-        self.my_files_btn.pack(side="right", padx=5)
 
         self.files_scroll = ctk.CTkScrollableFrame(self.files_tab, label_text="Files")
         self.files_scroll.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
@@ -263,13 +258,14 @@ class LANMessengerApp(ctk.CTk):
         entry = ctk.CTkEntry(dialog, placeholder_text="192.168.x.x")
         entry.pack(pady=5)
         
-        def connect():
-            ip = entry.get()
+        def connect(event=None):
+            ip = entry.get().strip()
             if ip:
                 # Send Hello
-                threading.Thread(target=self.try_manual_connect, args=(ip,)).start()
+                threading.Thread(target=self.try_manual_connect, args=(ip,), daemon=True).start()
                 dialog.destroy()
         
+        entry.bind("<Return>", connect)
         ctk.CTkButton(dialog, text="Connect", command=connect).pack(pady=20)
 
     def try_manual_connect(self, ip):
@@ -380,24 +376,7 @@ class LANMessengerApp(ctk.CTk):
     def browse_peer_files(self, ip, name):
         self.current_file_view_source = ip
         self.source_label.configure(text=f"Viewing: {name}'s Files")
-        self.refresh_files_view()
-    def show_my_files(self):
-        self.current_file_view_source = "Local"
-        self.source_label.configure(text="Viewing: Local Shared Files")
-        self.refresh_files_view()
-
-
-    def return_to_local_view(self):
-        if self.current_file_view_source == "Local":
-            return
-        self.current_file_view_source = "Local"
-        self.source_label.configure(text="Viewing: Local Shared Files")
-        self.refresh_files_view()
-
-
-    def show_local_files(self):
-        self.current_file_view_source = "Local"
-        self.source_label.configure(text="Viewing: Local Shared Files")
+        self.tabview.set("Files")
         self.refresh_files_view()
     def refresh_files_view(self):
         self.file_checkboxes = []
