@@ -270,7 +270,7 @@ class FileTransferManager:
                             # Use 64KB buffer
                             chunk = s.recv(min(65536, size - received))
                             if not chunk:
-                                break
+                                raise ConnectionError("Connection closed prematurely")
                             f.write(chunk)
                             received += len(chunk)
                             # per‑file progress update
