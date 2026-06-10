@@ -157,7 +157,8 @@ class FileTransferManager:
             while received < size:
                 # Use 64KB buffer for faster network receives and disk writes
                 data = sock.recv(min(65536, size - received))
-                if not data: break
+                if not data:
+                    raise ConnectionError("Connection closed prematurely")
                 f.write(data)
                 received += len(data)
         print(f"[DEBUG] Received {filename}")
