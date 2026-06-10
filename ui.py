@@ -258,11 +258,20 @@ class LANMessengerApp(ctk.CTk):
         ctk.CTkLabel(ip_frame, text=f"My IP: {my_ip}").pack(side="left", padx=5)
 
         def copy_ip():
-            self.clipboard_clear()
-            self.clipboard_append(my_ip)
-            orig_color = copy_btn.cget("fg_color")
-            copy_btn.configure(text="Copied!", fg_color="#2ecc71") # Green
-            dialog.after(2000, lambda: copy_btn.configure(text="Copy", fg_color=orig_color))
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(my_ip)
+                orig_color = copy_btn.cget("fg_color")
+                copy_btn.configure(text="Copied!", fg_color="#2ecc71") # Green
+                def reset_button():
+                    try:
+                        if copy_btn.winfo_exists():
+                            copy_btn.configure(text="Copy", fg_color=orig_color)
+                    except Exception:
+                        pass
+                dialog.after(2000, reset_button)
+            except Exception:
+                pass
 
         copy_btn = ctk.CTkButton(ip_frame, text="Copy", width=60, height=24, command=copy_ip)
         copy_btn.pack(side="left", padx=5)
