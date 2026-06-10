@@ -5,3 +5,7 @@
 ## 2025-05-16 - [SSL Context Creation Overhead]
 **Learning:** `ssl.create_default_context()` and `load_cert_chain()` are surprisingly expensive (~1.5ms to 2.2ms per call) because they involve parsing certificates and initializing the OpenSSL engine. In a high-frequency connection environment (like P2P chat), this adds up.
 **Action:** Cache `ssl.SSLContext` objects for reuse across connections. Centralize SSL management in a utility module to ensure consistent caching and security settings.
+
+## 2025-05-17 - [Efficient Socket Data Collection]
+**Learning:** Iterative byte string concatenation (e.g., `data += chunk`) in Python is an O(n^2) operation because strings/bytes are immutable, leading to massive performance degradation as the data size grows (e.g., 50MB taking >150s vs <0.1s).
+**Action:** Always collect data chunks in a list and use `b"".join(chunks)` for linear time complexity. Pair this with a larger 64KB buffer to minimize syscall overhead.

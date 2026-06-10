@@ -90,7 +90,8 @@ class FileTransferManager:
                     ack = client.recv(1024)
                     with open(path, 'rb') as f:
                         while True:
-                            data = f.read(8192)
+                            # Use 64KB buffer for faster disk I/O and network sends
+                            data = f.read(65536)
                             if not data: break
                             client.sendall(data)
                 else:
@@ -107,10 +108,10 @@ class FileTransferManager:
                         'is_folder': f[5],
                         'owner': f[4]
                     })
-                data = json.dumps(file_list)
-                client.sendall(json.dumps({'status': 'OK', 'size': len(data)}).encode())
+                data_encoded = json.dumps(file_list).encode()
+                client.sendall(json.dumps({'status': 'OK', 'size': len(data_encoded)}).encode())
                 ack = client.recv(1024)
-                client.sendall(data.encode())
+                client.sendall(data_encoded)
 
             elif cmd == 'LIST_FOLDER':
                 # Use pathlib for OS‑independent path handling and include directories in the listing
@@ -133,10 +134,10 @@ class FileTransferManager:
                                 'rel_path': rel_path,
                                 'size': 0
                             })
-                    data = json.dumps(entries)
-                    client.sendall(json.dumps({'status': 'OK', 'size': len(data)}).encode())
+                    data_encoded = json.dumps(entries).encode()
+                    client.sendall(json.dumps({'status': 'OK', 'size': len(data_encoded)}).encode())
                     ack = client.recv(1024)
-                    client.sendall(data.encode())
+                    client.sendall(data_encoded)
                 else:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Folder not found'}).encode())
 
@@ -154,7 +155,8 @@ class FileTransferManager:
         received = 0
         with open(path, 'wb') as f:
             while received < size:
-                data = sock.recv(min(8192, size - received))
+                # Use 64KB buffer for faster network receives and disk writes
+                data = sock.recv(min(65536, size - received))
                 if not data: break
                 f.write(data)
                 received += len(data)
@@ -208,12 +210,7 @@ class FileTransferManager:
                     return
                 size = resp.get('size')
                 s.sendall(b'ACK')
-                data = b""
-                while len(data) < size:
-                    chunk = s.recv(8192)
-                    if not chunk:
-                        break
-                    data += chunk
+                data = self._recv_all(s, size)
                 file_list = json.loads(data)
 
             # Filter only files
@@ -269,7 +266,8 @@ class FileTransferManager:
                     received = 0
                     with open(local_path, 'wb') as f:
                         while received < size:
-                            chunk = s.recv(min(8192, size - received))
+                            # Use 64KB buffer
+                            chunk = s.recv(min(65536, size - received))
                             if not chunk:
                                 break
                             f.write(chunk)
@@ -291,6 +289,19 @@ class FileTransferManager:
             print(f"[DEBUG] File {rel_path} download error: {e}")
             return False
 
+    def _recv_all(self, sock, size):
+        """Efficiently receive exactly *size* bytes from a socket using b''.join()."""
+        chunks = []
+        received = 0
+        while received < size:
+            # Use a larger 64KB buffer to reduce syscalls
+            chunk = sock.recv(min(65536, size - received))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            received += len(chunk)
+        return b"".join(chunks)
+
     def get_shared_files(self, target_ip):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
@@ -306,11 +317,7 @@ class FileTransferManager:
                 if resp.get('status') == 'OK':
                     size = resp.get('size')
                     s.sendall(b'ACK')
-                    data = b""
-                    while len(data) < size:
-                        chunk = s.recv(8192)
-                        if not chunk: break
-                        data += chunk
+                    data = self._recv_all(s, size)
                     return json.loads(data)
         except Exception as e:
             print(f"[DEBUG] Get shared files error: {e}")
