@@ -249,22 +249,45 @@ class LANMessengerApp(ctk.CTk):
     def add_manual_peer(self):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Connect to IP")
-        dialog.geometry("300x250")
+        dialog.geometry("350x280")
         dialog.transient(self)
-        
-        ctk.CTkLabel(dialog, text="My IP: " + socket.gethostbyname(socket.gethostname())).pack(pady=10)
-        
-        ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=5)
+
+        my_ip = socket.gethostbyname(socket.gethostname())
+        ip_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        ip_frame.pack(pady=15)
+        ctk.CTkLabel(ip_frame, text=f"My IP: {my_ip}").pack(side="left", padx=5)
+
+        def copy_ip():
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(my_ip)
+                orig_color = copy_btn.cget("fg_color")
+                copy_btn.configure(text="Copied!", fg_color="#2ecc71") # Green
+                def reset_button():
+                    try:
+                        if copy_btn.winfo_exists():
+                            copy_btn.configure(text="Copy", fg_color=orig_color)
+                    except Exception:
+                        pass
+                dialog.after(2000, reset_button)
+            except Exception:
+                pass
+
+        copy_btn = ctk.CTkButton(ip_frame, text="Copy", width=60, height=24, command=copy_ip)
+        copy_btn.pack(side="left", padx=5)
+
+        ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=(10, 5))
         entry = ctk.CTkEntry(dialog, placeholder_text="192.168.x.x")
         entry.pack(pady=5)
-        
+        entry.focus_set()
+
         def connect(event=None):
             ip = entry.get().strip()
             if ip:
                 # Send Hello
                 threading.Thread(target=self.try_manual_connect, args=(ip,), daemon=True).start()
                 dialog.destroy()
-        
+
         entry.bind("<Return>", connect)
         ctk.CTkButton(dialog, text="Connect", command=connect).pack(pady=20)
 
