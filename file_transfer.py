@@ -298,7 +298,7 @@ class FileTransferManager:
             # Use a larger 64KB buffer to reduce syscalls
             chunk = sock.recv(min(65536, size - received))
             if not chunk:
-                break
+                raise ConnectionError("Connection closed prematurely")
             chunks.append(chunk)
             received += len(chunk)
         return b"".join(chunks)
