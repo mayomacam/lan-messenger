@@ -51,6 +51,7 @@ class LANMessengerApp(ctk.CTk):
         )
         
         self.peers = {} # ip -> username
+        self.last_peers_snapshot = {} # ip -> username
         self.current_file_view_source = "Local" # "Local" or IP
         
         # Layout
@@ -231,17 +232,24 @@ class LANMessengerApp(ctk.CTk):
             messagebox.showinfo("Username Updated", f"Your name is now: {self.username}")
             
     def refresh_peers(self):
+        # Only rebuild if the peer list has actually changed (saves UI layout/rendering cost)
+        if self.peers == self.last_peers_snapshot:
+            self.after(2000, self.refresh_peers)
+            return
+
+        self.last_peers_snapshot = self.peers.copy()
+
         # Only show known peers
         for widget in self.peers_scroll.winfo_children():
             widget.destroy()
-            
+
         for ip, name in self.peers.items():
             row = ctk.CTkFrame(self.peers_scroll)
             row.pack(fill="x", pady=2)
             lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
             lbl.pack(side="left", padx=5)
-            
-            btn = ctk.CTkButton(row, text="Browse", width=60, height=20, 
+
+            btn = ctk.CTkButton(row, text="Browse", width=60, height=20,
                               command=lambda i=ip, n=name: self.browse_peer_files(i, n))
             btn.pack(side="right", padx=5)
         self.after(2000, self.refresh_peers)
@@ -299,14 +307,21 @@ class LANMessengerApp(ctk.CTk):
            self.after(0, lambda: messagebox.showerror("Connection Failed", f"Could not connect to {ip}"))
 
     def load_chat_history(self):
+        # Batching insertions into the textbox to minimize layout recalculations
         messages = self.db.get_messages(100)
         self.chat_display.configure(state="normal")
         self.chat_display.delete("1.0", "end")
+
+        chat_lines = []
         for msg in messages:
             sender = msg[1]
             content = msg[2]
             ts = time.strftime('%H:%M', time.localtime(msg[3]))
-            self.chat_display.insert("end", f"[{ts}] {sender}: {content}\n")
+            chat_lines.append(f"[{ts}] {sender}: {content}")
+
+        if chat_lines:
+            self.chat_display.insert("end", "\n".join(chat_lines) + "\n")
+
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
