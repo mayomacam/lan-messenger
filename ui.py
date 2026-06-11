@@ -64,6 +64,7 @@ class LANMessengerApp(ctk.CTk):
         # Periodic Updates
         self.after(2000, self.refresh_peers)
         self.load_chat_history()
+        self.msg_entry.focus_set()
         
     def prompt_username(self):
         dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
@@ -133,7 +134,7 @@ class LANMessengerApp(ctk.CTk):
         self.sidebar_frame.grid_rowconfigure(3, weight=1)
 
     def create_main_area(self):
-        self.tabview = ctk.CTkTabview(self)
+        self.tabview = ctk.CTkTabview(self, command=self._on_tab_changed)
         self.tabview.grid(row=0, column=1, padx=20, pady=10, sticky="nsew")
         
         # ... (rest of create_main_area is same until we need to change something else)
@@ -217,6 +218,11 @@ class LANMessengerApp(ctk.CTk):
 
         self.file_checkboxes = [] # (checkbox_widget, file_data)
 
+
+    def _on_tab_changed(self):
+        if self.tabview.get() == "Global Chat":
+            self.msg_entry.focus_set()
+
     def update_username(self, event=None):
         new_name = self.username_entry.get().strip()
         if new_name and new_name != self.username:
@@ -228,13 +234,28 @@ class LANMessengerApp(ctk.CTk):
             for ip in self.peers:
                 threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
             
-            messagebox.showinfo("Username Updated", f"Your name is now: {self.username}")
+            # Visual feedback on button
+            orig_text = self.change_name_btn.cget("text")
+            orig_color = self.change_name_btn.cget("fg_color")
+            self.change_name_btn.configure(text="Saved!", fg_color="#2ecc71") # Green
+
+            def reset_btn():
+                try:
+                    if self.change_name_btn.winfo_exists():
+                        self.change_name_btn.configure(text=orig_text, fg_color=orig_color)
+                except Exception:
+                    pass
+            self.after(2000, reset_btn)
             
     def refresh_peers(self):
         # Only show known peers
         for widget in self.peers_scroll.winfo_children():
             widget.destroy()
             
+        if not self.peers:
+            lbl = ctk.CTkLabel(self.peers_scroll, text="No peers found yet...", font=("Arial", 10), text_color="gray")
+            lbl.pack(pady=20)
+
         for ip, name in self.peers.items():
             row = ctk.CTkFrame(self.peers_scroll)
             row.pack(fill="x", pady=2)
@@ -504,7 +525,9 @@ class LANMessengerApp(ctk.CTk):
         entry_file.insert(0, str(self.settings["tcp_file_port"]))
         entry_file.pack(pady=5)
         
-        def save():
+        entry_chat.focus_set()
+
+        def save(event=None):
             try:
                 self.settings["tcp_chat_port"] = int(entry_chat.get())
                 self.settings["tcp_file_port"] = int(entry_file.get())
@@ -516,6 +539,9 @@ class LANMessengerApp(ctk.CTk):
                 messagebox.showerror("Error", "Ports must be numbers.")
         
         ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green").pack(pady=20)
+
+        entry_chat.bind("<Return>", save)
+        entry_file.bind("<Return>", save)
 
     def on_closing(self):
         self.network.close()
