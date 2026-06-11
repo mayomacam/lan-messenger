@@ -90,6 +90,8 @@ class FileTransferManager:
                 filename = req.get('filename')
                 size = req.get('size')
                 if not isinstance(filename, str) or not isinstance(size, int): return
+                filename = os.path.basename(filename.replace("\\", "/"))
+                if not filename or filename in ("..", "."): return
                 if logger: logger.log("FILE_TRANSFER", f"Receiving file '{filename}' ({size} bytes) from {addr[0]}.")
                 client.sendall(b'ACK')
                 self.receive_stream(client, filename, size)
