@@ -232,6 +232,8 @@ class LANMessengerApp(ctk.CTk):
         if new_name and new_name != self.username:
             old_name = self.username
             self.username = new_name
+            if hasattr(self, 'discovery'):
+                self.discovery.username = new_name
             self.settings["username"] = new_name
             save_settings(self.settings)
             self.logger.log("SETTINGS_CHANGE", f"Username changed from {old_name} to {new_name}")
