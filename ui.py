@@ -220,7 +220,7 @@ class LANMessengerApp(ctk.CTk):
 
 
     def _on_tab_changed(self):
-        if self.tabview.get() == "Global Chat":
+        if self.tabview.get() == "Global Chat" and hasattr(self, "msg_entry"):
             self.msg_entry.focus_set()
 
     def update_username(self, event=None):
