@@ -3,6 +3,7 @@ import threading
 import os
 import json
 import time
+from pathlib import Path
 from ssl_utils import wrap_socket
 
 class FileTransferManager:
@@ -115,7 +116,6 @@ class FileTransferManager:
 
             elif cmd == 'LIST_FOLDER':
                 # Use pathlib for OS‑independent path handling and include directories in the listing
-                from pathlib import Path
                 path_str = req.get('path')
                 base_path = Path(path_str)
                 if base_path.exists() and base_path.is_dir():
@@ -247,7 +247,6 @@ class FileTransferManager:
         Returns *True* on success, *False* on any error.
         Uses pathlib for cross‑platform path handling and includes auth token if set.
         """
-        from pathlib import Path
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
                 raw.settimeout(10)

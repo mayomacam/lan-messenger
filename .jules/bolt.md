@@ -9,3 +9,7 @@
 ## 2025-05-17 - [Efficient Socket Data Collection]
 **Learning:** Iterative byte string concatenation (e.g., `data += chunk`) in Python is an O(n^2) operation because strings/bytes are immutable, leading to massive performance degradation as the data size grows (e.g., 50MB taking >150s vs <0.1s).
 **Action:** Always collect data chunks in a list and use `b"".join(chunks)` for linear time complexity. Pair this with a larger 64KB buffer to minimize syscall overhead.
+
+## 2025-05-18 - [Tkinter Widget Churn & Batching]
+**Learning:** Rebuilding complex widget hierarchies in a loop (e.g., `self.after` every 2s) and performing individual `insert` calls into text widgets are hidden performance killers in Tkinter. Snapshot-based change detection and batched string insertions minimize layout engine thrashing and rendering latency.
+**Action:** Use snapshot comparison to skip redundant UI updates and batch text insertions using `"\n".join(lines)` for a single `insert` call.
