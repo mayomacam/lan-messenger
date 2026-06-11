@@ -5,6 +5,7 @@ import json
 import time
 from pathlib import Path
 from ssl_utils import wrap_socket
+import audit
 
 class FileTransferManager:
     def __init__(self, db, port, save_dir="downloads", bind_ip="0.0.0.0", auth_token=None, allowed_ips=None):
@@ -52,10 +53,12 @@ class FileTransferManager:
         """Handle a client connection.
         Includes optional IP whitelist enforcement.
         """
+        logger = audit.get_logger()
         try:
             client.settimeout(10)
             # IP whitelist check
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
+                if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: IP not allowed.")
                 client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())
                 return
 
@@ -65,27 +68,45 @@ class FileTransferManager:
 
             try:
                 req = json.loads(header_raw)
+                if not isinstance(req, dict):
+                     if logger: logger.log("SECURITY_ALERT", f"Malformed file request from {addr[0]}: Not a JSON object.")
+                     return
             except json.JSONDecodeError:
+                if logger: logger.log("SECURITY_ALERT", f"Malformed file request from {addr[0]}: Invalid JSON.")
                 print(f"[DEBUG] File server received invalid JSON header")
                 return
 
             # Simple token authentication if enabled
             if self.auth_token is not None:
                 if req.get('token') != self.auth_token:
+                    if logger: logger.log("AUTH_FAILURE", f"File transfer authentication failed for {addr[0]}.")
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Authentication failed'}).encode())
                     return
                 # token matches – continue processing
             cmd = req.get('cmd')
+            if not isinstance(cmd, str): return
 
             if cmd == 'PUSH_FILE':
                 filename = req.get('filename')
                 size = req.get('size')
+                if not isinstance(filename, str) or not isinstance(size, int): return
+                filename = os.path.basename(filename.replace("\\", "/"))
+                if not filename or filename in ("..", "."): return
+                if logger: logger.log("FILE_TRANSFER", f"Receiving file '{filename}' ({size} bytes) from {addr[0]}.")
                 client.sendall(b'ACK')
                 self.receive_stream(client, filename, size)
 
             elif cmd == 'PULL_FILE':
                 path = req.get('path')
+                if not isinstance(path, str): return
+                # Sanitize path to prevent directory traversal
+                if ".." in path or os.path.isabs(path) or path.startswith("/") or path.startswith("\\"):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked potential directory traversal attempt from {addr[0]}: {path}")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
+
                 if os.path.exists(path) and os.path.isfile(path):
+                    if logger: logger.log("FILE_TRANSFER", f"Sending file '{path}' to {addr[0]}.")
                     size = os.path.getsize(path)
                     client.sendall(json.dumps({'status': 'OK', 'size': size}).encode())
                     ack = client.recv(1024)
@@ -96,6 +117,7 @@ class FileTransferManager:
                             if not data: break
                             client.sendall(data)
                 else:
+                    if logger: logger.log("SECURITY_ALERT", f"Requested file '{path}' not found for {addr[0]}.")
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found'}).encode())
 
             elif cmd == 'LIST_SHARED':

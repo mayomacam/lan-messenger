@@ -45,7 +45,18 @@ class Database:
                     is_folder BOOLEAN DEFAULT 0
                 )
             """)
+            # Index to speed up message retrieval ordered by timestamp
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_deleted_timestamp ON messages(is_deleted, timestamp)")
 
+            # Audit Logs table: id, event_type, details, timestamp
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    details TEXT,
+                    timestamp REAL NOT NULL
+                )
+            """)
             self.conn.commit()
 
     def add_message(self, sender: str, content: str) -> str:
@@ -91,6 +102,18 @@ class Database:
     def get_files(self) -> List[Tuple]:
         with self.lock:
             cursor = self.conn.execute("SELECT * FROM files")
+            return cursor.fetchall()
+
+    def add_audit_log(self, event_type: str, details: str):
+        timestamp = time.time()
+        with self.lock:
+            with self.conn:
+                self.conn.execute("INSERT INTO audit_logs (event_type, details, timestamp) VALUES (?, ?, ?)",
+                                 (event_type, details, timestamp))
+
+    def get_audit_logs(self, limit=100) -> List[Tuple]:
+        with self.lock:
+            cursor = self.conn.execute("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT ?", (limit,))
             return cursor.fetchall()
 
     def close(self):
