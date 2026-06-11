@@ -100,7 +100,7 @@ class FileTransferManager:
                 path = req.get('path')
                 if not isinstance(path, str): return
                 # Sanitize path to prevent directory traversal
-                if ".." in path or path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+                if ".." in path or os.path.isabs(path) or path.startswith("/") or path.startswith("\\"):
                     if logger: logger.log("SECURITY_ALERT", f"Blocked potential directory traversal attempt from {addr[0]}: {path}")
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
                     return
