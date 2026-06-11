@@ -64,7 +64,7 @@ class LANMessengerApp(ctk.CTk):
         # Periodic Updates
         self.after(2000, self.refresh_peers)
         self.load_chat_history()
-        self.msg_entry.focus_set()
+        self.after(100, self.msg_entry.focus_set)
         
     def prompt_username(self):
         dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
