@@ -59,6 +59,8 @@ class DiscoveryManager:
                 if packet.get('type') == 'DISCOVERY':
                     peer_ip = addr[0]
                     peer_username = packet.get('username')
+                    if not isinstance(peer_username, str):
+                        continue
 
                     # Avoid discovering self by checking username
                     if peer_username != self.username:
