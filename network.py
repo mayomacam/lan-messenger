@@ -177,6 +177,17 @@ class NetworkManager:
                 self.db.add_received_message(msg_id, sender, content, timestamp)
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
+            elif msg_type == 'MSG_PRIV':
+                sender = data.get('sender')
+                content = data.get('content')
+                msg_id = data.get('id')
+                if not all(isinstance(x, str) for x in [sender, content, msg_id]):
+                    return
+                timestamp = time.time()
+                # Store with recipient = sender's IP so we can filter by peer_ip later
+                self.db.add_received_message(msg_id, sender, content, timestamp, recipient=addr[0])
+                if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])
+
             elif msg_type == 'MSG_EDIT':
                 msg_id = data.get('id')
                 new_content = data.get('content')
@@ -216,9 +227,10 @@ class NetworkManager:
     def send_hello(self, target_ip, my_username):
         return self._send_packet(target_ip, {'type': 'HELLO', 'username': my_username})
 
-    def send_message(self, target_ip, sender_name, content, msg_id):
+    def send_message(self, target_ip, sender_name, content, msg_id, is_private=False):
+        msg_type = 'MSG_PRIV' if is_private else 'MSG'
         self._send_packet(target_ip, {
-            'type': 'MSG',
+            'type': msg_type,
             'sender': sender_name,
             'content': content,
             'id': msg_id
