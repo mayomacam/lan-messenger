@@ -36,18 +36,19 @@ class EncryptionManager:
         if not data: return ""
         nonce = os.urandom(12)
         ciphertext = self.aesgcm.encrypt(nonce, data.encode(), None)
-        return base64.b64encode(nonce + ciphertext).decode()
+        return "enc:" + base64.b64encode(nonce + ciphertext).decode()
 
     def decrypt(self, encrypted_data: str) -> str:
         if not encrypted_data: return ""
+        if not encrypted_data.startswith("enc:"):
+            return encrypted_data
         try:
-            raw_data = base64.b64decode(encrypted_data)
+            raw_data = base64.b64decode(encrypted_data[4:])
             nonce = raw_data[:12]
             ciphertext = raw_data[12:]
             return self.aesgcm.decrypt(nonce, ciphertext, None).decode()
         except Exception:
-            # Fallback for plain text if any existed before encryption was enabled
-            return encrypted_data
+            return "[Decryption Failed]"
 
 class Database:
     def __init__(self, db_name="lan_messenger.db"):
