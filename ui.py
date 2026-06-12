@@ -61,6 +61,7 @@ class LANMessengerApp(ctk.CTk):
         )
 
         self.peers = {} # ip -> username
+        self._last_peers_snapshot = None
         self.current_file_view_source = "Local" # "Local" or IP
 
         # Layout
@@ -245,19 +246,27 @@ class LANMessengerApp(ctk.CTk):
             messagebox.showinfo("Username Updated", f"Your name is now: {self.username}")
 
     def refresh_peers(self):
-        # Only show known peers
+        # Performance: Only rebuild UI if peer list changed (saves layout/render cycles every 2s)
+        if self.peers == self._last_peers_snapshot:
+            self.after(2000, self.refresh_peers)
+            return
+        self._last_peers_snapshot = self.peers.copy()
+
         for widget in self.peers_scroll.winfo_children():
             widget.destroy()
 
-        for ip, name in self.peers.items():
-            row = ctk.CTkFrame(self.peers_scroll)
-            row.pack(fill="x", pady=2)
-            lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
-            lbl.pack(side="left", padx=5)
+        if not self.peers:
+            ctk.CTkLabel(self.peers_scroll, text="No peers found yet...", font=("Arial", 12), text_color="gray").pack(pady=20)
+        else:
+            for ip, name in self.peers.items():
+                row = ctk.CTkFrame(self.peers_scroll)
+                row.pack(fill="x", pady=2)
+                lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
+                lbl.pack(side="left", padx=5)
 
-            btn = ctk.CTkButton(row, text="Browse", width=60, height=20,
-                              command=lambda i=ip, n=name: self.browse_peer_files(i, n))
-            btn.pack(side="right", padx=5)
+                btn = ctk.CTkButton(row, text="Browse", width=60, height=20,
+                                  command=lambda i=ip, n=name: self.browse_peer_files(i, n))
+                btn.pack(side="right", padx=5)
         self.after(2000, self.refresh_peers)
 
     def add_manual_peer(self):
@@ -293,11 +302,17 @@ class LANMessengerApp(ctk.CTk):
         messages = self.db.get_messages(100)
         self.chat_display.configure(state="normal")
         self.chat_display.delete("1.0", "end")
+        # Batch insertions for better performance (minimizes layout engine thrashing)
+        lines = []
         for msg in messages:
             sender = msg[1]
             content = msg[2]
             ts = time.strftime('%H:%M', time.localtime(msg[3]))
-            self.chat_display.insert("end", f"[{ts}] {sender}: {content}\n")
+            lines.append(f"[{ts}] {sender}: {content}")
+
+        if lines:
+            self.chat_display.insert("end", "\n".join(lines) + "\n")
+
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
