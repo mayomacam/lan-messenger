@@ -61,6 +61,7 @@ class LANMessengerApp(ctk.CTk):
         )
 
         self.peers = {} # ip -> username
+        self._last_peers_snapshot = None
         self.current_file_view_source = "Local" # "Local" or IP
 
         # Layout
@@ -144,10 +145,8 @@ class LANMessengerApp(ctk.CTk):
         self.sidebar_frame.grid_rowconfigure(3, weight=1)
 
     def create_main_area(self):
-        self.tabview = ctk.CTkTabview(self)
+        self.tabview = ctk.CTkTabview(self, command=self.on_tab_change)
         self.tabview.grid(row=0, column=1, padx=20, pady=10, sticky="nsew")
-
-        # ... (rest of create_main_area is same until we need to change something else)
 
         self.chat_tab = self.tabview.add("Global Chat")
         self.files_tab = self.tabview.add("Files")
@@ -243,10 +242,19 @@ class LANMessengerApp(ctk.CTk):
             for ip in self.peers:
                 threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
 
-            messagebox.showinfo("Username Updated", f"Your name is now: {self.username}")
+            # Non-blocking success feedback
+            self.change_name_btn.configure(text="Saved", fg_color="#2ecc71")
+            self.after(2000, lambda: self.change_name_btn.configure(text="Set", fg_color=("#3B8ED0", "#1F6AA5")))
 
     def refresh_peers(self):
-        # Only show known peers
+        # Prevent unnecessary UI rebuilds using snapshot comparison
+        current_snapshot = json.dumps(self.peers, sort_keys=True)
+        if current_snapshot == self._last_peers_snapshot:
+            self.after(2000, self.refresh_peers)
+            return
+
+        self._last_peers_snapshot = current_snapshot
+
         for widget in self.peers_scroll.winfo_children():
             widget.destroy()
 
@@ -281,7 +289,11 @@ class LANMessengerApp(ctk.CTk):
             self.clipboard_clear()
             self.clipboard_append(my_ip)
             copy_btn.configure(text="Copied!", fg_color="#2ecc71")
-            self.after(2000, lambda: copy_btn.configure(text="Copy", fg_color=["#3B8ED0", "#1F6AA5"]))
+
+            def reset():
+                if copy_btn.winfo_exists():
+                    copy_btn.configure(text="Copy", fg_color=("#3B8ED0", "#1F6AA5"))
+            self.after(2000, reset)
 
         copy_btn = ctk.CTkButton(ip_frame, text="Copy", width=60, height=20, command=copy_ip)
         copy_btn.pack(side="left", padx=5)
@@ -308,15 +320,25 @@ class LANMessengerApp(ctk.CTk):
         else:
            self.after(0, lambda: messagebox.showerror("Connection Failed", f"Could not connect to {ip}"))
 
+    def on_tab_change(self):
+        if self.tabview.get() == "Global Chat":
+            self.msg_entry.focus_set()
+
     def load_chat_history(self):
         messages = self.db.get_messages(100)
         self.chat_display.configure(state="normal")
         self.chat_display.delete("1.0", "end")
+
+        lines = []
         for msg in messages:
             sender = msg[1]
             content = msg[2]
             ts = time.strftime('%H:%M', time.localtime(msg[3]))
-            self.chat_display.insert("end", f"[{ts}] {sender}: {content}\n")
+            lines.append(f"[{ts}] {sender}: {content}")
+
+        if lines:
+            self.chat_display.insert("end", "\n".join(lines) + "\n")
+
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
@@ -501,7 +523,7 @@ class LANMessengerApp(ctk.CTk):
     def open_settings(self):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Settings")
-        dialog.geometry("400x300")
+        dialog.geometry("400x320")
         dialog.transient(self)
 
         ctk.CTkLabel(dialog, text="Chat Port (TCP):").pack(pady=(10, 0))
@@ -514,7 +536,7 @@ class LANMessengerApp(ctk.CTk):
         entry_file.insert(0, str(self.settings["tcp_file_port"]))
         entry_file.pack(pady=5)
 
-        def save():
+        def save(event=None):
             try:
                 self.settings["tcp_chat_port"] = int(entry_chat.get())
                 self.settings["tcp_file_port"] = int(entry_file.get())
@@ -525,7 +547,10 @@ class LANMessengerApp(ctk.CTk):
             except ValueError:
                 messagebox.showerror("Error", "Ports must be numbers.")
 
+        entry_chat.bind("<Return>", save)
+        entry_file.bind("<Return>", save)
         ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green").pack(pady=20)
+        self.after(200, lambda: entry_chat.focus_set())
 
     def on_closing(self):
         if hasattr(self, 'discovery'):
