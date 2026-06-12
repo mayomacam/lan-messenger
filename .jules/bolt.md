@@ -16,4 +16,4 @@
 
 ## 2025-05-19 - [UI Polling and Text Batching]
 **Learning:** Polling loops that rebuild the entire UI every few seconds are a major source of layout thrashing and CPU waste in Tkinter. Snapshot-based comparison allows skipping 99% of these updates. Similarly, inserting text line-by-line into a Textbox widget is O(N) in terms of layout recalculations; batching into a single string makes it O(1).
-**Action:** Use `self._last_state_snapshot` for periodic UI refreshes and always batch string insertions into Text/Textbox widgets using `"\n".join(lines)`.
+**Action:** Use self._last_peers_snapshot for periodic UI refreshes and always batch string insertions into Text/Textbox widgets using "\n".join(lines).
