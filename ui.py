@@ -57,11 +57,14 @@ class LANMessengerApp(ctk.CTk):
         self.discovery = DiscoveryManager(
             username=self.username,
             chat_port=self.settings["tcp_chat_port"],
-            callback_new_peer=lambda ip, name: self.on_network_event('NEW_PEER', ip, name)
+            callback_new_peer=lambda ip, name: self.on_network_event('NEW_PEER', ip, name),
+            auth_token=self.settings.get("auth_token") or None
         )
 
         self.peers = {} # ip -> username
-        self._last_peers_snapshot = None
+        self.private_chats = {} # ip -> CTkTextbox
+        self.private_chat_tabs = {} # ip -> tab_name
+        self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
         # Layout
@@ -109,6 +112,14 @@ class LANMessengerApp(ctk.CTk):
                 threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
         elif event_type == 'MSG':
              self.load_chat_history()
+        elif event_type == 'MSG_PRIV':
+             # args: (msg_id, sender, content, peer_ip)
+             peer_ip = args[3]
+             if peer_ip in self.private_chats:
+                 self.load_private_chat(peer_ip)
+             else:
+                 sender_name = self.peers.get(peer_ip, args[1])
+                 self.open_private_chat(peer_ip, sender_name)
         elif event_type in ['EDIT', 'DELETE']:
              self.load_chat_history()
 
@@ -258,19 +269,19 @@ class LANMessengerApp(ctk.CTk):
         for widget in self.peers_scroll.winfo_children():
             widget.destroy()
 
-        if not self.peers:
-            lbl = ctk.CTkLabel(self.peers_scroll, text="No peers found yet...", font=("Arial", 11), text_color="gray")
-            lbl.pack(pady=20)
-        else:
-            for ip, name in self.peers.items():
-                row = ctk.CTkFrame(self.peers_scroll)
-                row.pack(fill="x", pady=2)
-                lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
-                lbl.pack(side="left", padx=5)
+        for ip, name in self.peers.items():
+            row = ctk.CTkFrame(self.peers_scroll)
+            row.pack(fill="x", pady=2)
+            lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
+            lbl.pack(side="left", padx=5)
 
-                btn = ctk.CTkButton(row, text="Browse", width=60, height=20,
-                                  command=lambda i=ip, n=name: self.browse_peer_files(i, n))
-                btn.pack(side="right", padx=5)
+            btn_browse = ctk.CTkButton(row, text="Browse", width=60, height=20,
+                              command=lambda i=ip, n=name: self.browse_peer_files(i, n))
+            btn_browse.pack(side="right", padx=5)
+
+            btn_chat = ctk.CTkButton(row, text="Chat", width=60, height=20,
+                              command=lambda i=ip, n=name: self.open_private_chat(i, n))
+            btn_chat.pack(side="right", padx=2)
         self.after(2000, self.refresh_peers)
 
     def add_manual_peer(self):
@@ -346,6 +357,18 @@ class LANMessengerApp(ctk.CTk):
         msg = self.msg_entry.get()
         if not msg: return
 
+        # If we are in a private chat tab, send private message
+        current_tab = self.tabview.get()
+        if current_tab.startswith("Chat: "):
+            peer_ip = self.current_private_peer
+            if peer_ip:
+                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip)
+                threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True)).start()
+                self.msg_entry.delete(0, "end")
+                self.load_private_chat(peer_ip)
+                return
+
+        # Otherwise send global message
         msg_id = self.db.add_message(self.username, msg)
 
         for ip in self.peers:
@@ -353,6 +376,63 @@ class LANMessengerApp(ctk.CTk):
 
         self.msg_entry.delete(0, "end")
         self.load_chat_history()
+
+    def open_private_chat(self, ip, name):
+        tab_name = f"Chat: {name}"
+        # Check if tab already exists
+        all_tabs = self.tabview._tab_dict.keys()
+        if tab_name not in all_tabs:
+            self.tabview.add(tab_name)
+            # Create UI for the new tab
+            tab_frame = self.tabview.tab(tab_name)
+            tab_frame.grid_columnconfigure(0, weight=1)
+            tab_frame.grid_rowconfigure(0, weight=1)
+
+            display = ctk.CTkTextbox(tab_frame, state="disabled")
+            display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+            # We don't need a separate input per tab if we reuse the global msg_entry,
+            # but it's currently in Global Chat tab. Let's move msg_entry to a more global place?
+            # Or just add an input to each private tab.
+
+            input_frame = ctk.CTkFrame(tab_frame, height=50)
+            input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+            input_frame.grid_columnconfigure(0, weight=1)
+
+            entry = ctk.CTkEntry(input_frame, placeholder_text=f"Message {name}...")
+            entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+
+            def send_priv(e=None, i=ip, ent=entry):
+                m = ent.get()
+                if not m: return
+                mid = self.db.add_message(self.username, m, recipient=i)
+                threading.Thread(target=self.network.send_message, args=(i, self.username, m, mid, True)).start()
+                ent.delete(0, "end")
+                self.load_private_chat(i)
+
+            entry.bind("<Return>", send_priv)
+            btn = ctk.CTkButton(input_frame, text="Send", width=100, command=send_priv)
+            btn.grid(row=0, column=1, padx=10, pady=10)
+
+            self.private_chats[ip] = display
+
+        self.current_private_peer = ip
+        self.tabview.set(tab_name)
+        self.load_private_chat(ip)
+
+    def load_private_chat(self, peer_ip):
+        if peer_ip not in self.private_chats: return
+        messages = self.db.get_messages(100, peer_ip=peer_ip)
+        display = self.private_chats[peer_ip]
+        display.configure(state="normal")
+        display.delete("1.0", "end")
+        for msg in messages:
+            sender = msg[1]
+            content = msg[2]
+            ts = time.strftime('%H:%M', time.localtime(msg[3]))
+            display.insert("end", f"[{ts}] {sender}: {content}\n")
+        display.configure(state="disabled")
+        display.see("end")
 
     def show_context_menu(self, event):
         self.context_menu.tk_popup(event.x_root, event.y_root)
@@ -399,7 +479,8 @@ class LANMessengerApp(ctk.CTk):
         if path:
             filename = os.path.basename(path)
             size = os.path.getsize(path)
-            self.db.add_file(filename, path, size, "127.0.0.1", is_folder=False)
+            local_ip = socket.gethostbyname(socket.gethostname())
+            self.db.add_file(filename, path, size, local_ip, is_folder=False)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
@@ -418,7 +499,8 @@ class LANMessengerApp(ctk.CTk):
         if path:
             dirname = os.path.basename(path)
             size = self.get_folder_size(path)
-            self.db.add_file(dirname, path, size, "127.0.0.1", is_folder=True)
+            local_ip = socket.gethostbyname(socket.gethostname())
+            self.db.add_file(dirname, path, size, local_ip, is_folder=True)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()

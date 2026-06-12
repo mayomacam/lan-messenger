@@ -2,4 +2,7 @@ tls_cert.pem
 tls_key.pem
 __pycache__/
 *.db
+*.db-shm
+*.db-wal
 downloads/
+.master.key
