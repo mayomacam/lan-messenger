@@ -74,6 +74,7 @@ class LANMessengerApp(ctk.CTk):
         # Periodic Updates
         self.after(2000, self.refresh_peers)
         self.load_chat_history()
+        self.after(100, lambda: self.msg_entry.focus_set())
 
     def prompt_username(self):
         dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
@@ -249,24 +250,41 @@ class LANMessengerApp(ctk.CTk):
         for widget in self.peers_scroll.winfo_children():
             widget.destroy()
 
-        for ip, name in self.peers.items():
-            row = ctk.CTkFrame(self.peers_scroll)
-            row.pack(fill="x", pady=2)
-            lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
-            lbl.pack(side="left", padx=5)
+        if not self.peers:
+            lbl = ctk.CTkLabel(self.peers_scroll, text="No peers found yet...", font=("Arial", 11), text_color="gray")
+            lbl.pack(pady=20)
+        else:
+            for ip, name in self.peers.items():
+                row = ctk.CTkFrame(self.peers_scroll)
+                row.pack(fill="x", pady=2)
+                lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
+                lbl.pack(side="left", padx=5)
 
-            btn = ctk.CTkButton(row, text="Browse", width=60, height=20,
-                              command=lambda i=ip, n=name: self.browse_peer_files(i, n))
-            btn.pack(side="right", padx=5)
+                btn = ctk.CTkButton(row, text="Browse", width=60, height=20,
+                                  command=lambda i=ip, n=name: self.browse_peer_files(i, n))
+                btn.pack(side="right", padx=5)
         self.after(2000, self.refresh_peers)
 
     def add_manual_peer(self):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Connect to IP")
-        dialog.geometry("300x250")
+        dialog.geometry("300x280")
         dialog.transient(self)
 
-        ctk.CTkLabel(dialog, text="My IP: " + socket.gethostbyname(socket.gethostname())).pack(pady=10)
+        ip_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        ip_frame.pack(pady=10)
+
+        my_ip = socket.gethostbyname(socket.gethostname())
+        ctk.CTkLabel(ip_frame, text="My IP: " + my_ip).pack(side="left", padx=5)
+
+        def copy_ip():
+            self.clipboard_clear()
+            self.clipboard_append(my_ip)
+            copy_btn.configure(text="Copied!", fg_color="#2ecc71")
+            self.after(2000, lambda: copy_btn.configure(text="Copy", fg_color=["#3B8ED0", "#1F6AA5"]))
+
+        copy_btn = ctk.CTkButton(ip_frame, text="Copy", width=60, height=20, command=copy_ip)
+        copy_btn.pack(side="left", padx=5)
 
         ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=5)
         entry = ctk.CTkEntry(dialog, placeholder_text="192.168.x.x")
@@ -281,6 +299,7 @@ class LANMessengerApp(ctk.CTk):
 
         entry.bind("<Return>", connect)
         ctk.CTkButton(dialog, text="Connect", command=connect).pack(pady=20)
+        self.after(200, lambda: entry.focus_set())
 
     def try_manual_connect(self, ip):
         success = self.network.send_hello(ip, self.username)
