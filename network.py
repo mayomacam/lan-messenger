@@ -2,15 +2,18 @@ import socket
 import threading
 import json
 import time
+import struct
+import hashlib
 from ssl_utils import wrap_socket
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
 class DiscoveryManager:
-    def __init__(self, username, chat_port, callback_new_peer):
+    def __init__(self, username, chat_port, callback_new_peer, auth_token=None):
         self.username = username
         self.chat_port = chat_port
         self.callback = callback_new_peer
+        self.auth_token = auth_token
         self.udp_port = UDP_BROADCAST_PORT
         self.running = True
 
@@ -28,14 +31,25 @@ class DiscoveryManager:
         threading.Thread(target=self.listen, daemon=True).start()
         threading.Thread(target=self.broadcast_loop, daemon=True).start()
 
+    def _get_discovery_hash(self):
+        if not self.auth_token:
+            return None
+        # Simple hash to verify peers share the same secret without sending the secret itself
+        return hashlib.sha256(self.auth_token.encode()).hexdigest()
+
     def broadcast_loop(self):
         while self.running:
             try:
-                data = json.dumps({
+                packet = {
                     'type': 'DISCOVERY',
                     'username': self.username,
                     'port': self.chat_port
-                })
+                }
+                h = self._get_discovery_hash()
+                if h:
+                    packet['hash'] = h
+
+                data = json.dumps(packet)
                 self.sock.sendto(data.encode(), (BROADCAST_IP, self.udp_port))
             except Exception as e:
                 print(f"[DEBUG] Discovery broadcast error: {e}")
@@ -60,6 +74,13 @@ class DiscoveryManager:
                     peer_ip = addr[0]
                     peer_username = packet.get('username')
                     if not isinstance(peer_username, str):
+                        continue
+
+                    # Security: verify hash if auth_token is set
+                    my_hash = self._get_discovery_hash()
+                    peer_hash = packet.get('hash')
+                    if my_hash != peer_hash:
+                        # Silently ignore peers that don't match our security context
                         continue
 
                     # Avoid discovering self by checking username
@@ -119,6 +140,35 @@ class NetworkManager:
             except Exception as e:
                 print(f"[DEBUG] Server accept error: {e}")
 
+    def _recv_all(self, sock, n):
+        """Helper to receive exactly n bytes."""
+        data = b''
+        while len(data) < n:
+            packet = sock.recv(n - len(data))
+            if not packet:
+                return None
+            data += packet
+        return data
+
+    def _recv_json(self, sock):
+        """Receives a length-prefixed JSON packet."""
+        raw_msglen = self._recv_all(sock, 4)
+        if not raw_msglen:
+            return None
+        msglen = struct.unpack('>I', raw_msglen)[0]
+        # Safety limit: 1MB
+        if msglen > 1024 * 1024:
+            return None
+        raw_data = self._recv_all(sock, msglen)
+        if not raw_data:
+            return None
+        return json.loads(raw_data.decode())
+
+    def _send_json(self, sock, data):
+        """Sends a length-prefixed JSON packet."""
+        serialized = json.dumps(data).encode()
+        sock.sendall(struct.pack('>I', len(serialized)) + serialized)
+
     def handle_client(self, client, addr):
         """Process incoming client packets with optional IP whitelist and token verification."""
         logger = audit.get_logger()
@@ -129,16 +179,15 @@ class NetworkManager:
                 msg = f"Connection from {addr[0]} rejected: IP not allowed."
                 print(f"[DEBUG] {msg}")
                 if logger: logger.log("SECURITY_ALERT", msg)
-                client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())
+                self._send_json(client, {'status': 'ERR', 'msg': 'IP not allowed'})
                 return
 
-            data_raw = client.recv(8192).decode()
-            if not data_raw:
+            data = self._recv_json(client)
+            if not data:
                 return
 
-            print(f"[DEBUG] Received data from {addr}: {data_raw}")
+            print(f"[DEBUG] Received data from {addr}: {data}")
             try:
-                data = json.loads(data_raw)
                 if not isinstance(data, dict):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed packet from {addr[0]}: Not a JSON object.")
                     return
@@ -153,7 +202,7 @@ class NetworkManager:
                     msg = f"Connection from {addr[0]} rejected: Authentication failed."
                     print(f"[DEBUG] {msg}")
                     if logger: logger.log("AUTH_FAILURE", msg)
-                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Authentication failed'}).encode())
+                    self._send_json(client, {'status': 'ERR', 'msg': 'Authentication failed'})
                     return
 
             # Existing message handling with validation
@@ -218,7 +267,7 @@ class NetworkManager:
                 raw.settimeout(5)
                 raw.connect((target_ip, self.port))
                 s = wrap_socket(raw)
-                s.sendall(json.dumps(packet).encode())
+                self._send_json(s, packet)
                 return True
         except Exception as e:
             print(f"[DEBUG] Failed to send to {target_ip}: {e}")

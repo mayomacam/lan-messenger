@@ -57,12 +57,12 @@ class LANMessengerApp(ctk.CTk):
         self.discovery = DiscoveryManager(
             username=self.username,
             chat_port=self.settings["tcp_chat_port"],
-            callback_new_peer=lambda ip, name: self.on_network_event('NEW_PEER', ip, name)
+            callback_new_peer=lambda ip, name: self.on_network_event('NEW_PEER', ip, name),
+            auth_token=self.settings.get("auth_token") or None
         )
 
         self.peers = {} # ip -> username
         self.private_chats = {} # ip -> CTkTextbox
-        self.private_chat_tabs = {} # ip -> tab_name
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
@@ -116,8 +116,8 @@ class LANMessengerApp(ctk.CTk):
              if peer_ip in self.private_chats:
                  self.load_private_chat(peer_ip)
              else:
-                 sender_name = self.peers.get(peer_ip, args[1])
-                 self.open_private_chat(peer_ip, sender_name)
+                 # Notification could be added here
+                 pass
         elif event_type in ['EDIT', 'DELETE']:
              self.load_chat_history()
 
@@ -342,7 +342,9 @@ class LANMessengerApp(ctk.CTk):
 
     def open_private_chat(self, ip, name):
         tab_name = f"Chat: {name}"
-        try:
+        # Check if tab already exists
+        all_tabs = self.tabview._tab_dict.keys()
+        if tab_name not in all_tabs:
             self.tabview.add(tab_name)
             # Create UI for the new tab
             tab_frame = self.tabview.tab(tab_name)
@@ -376,9 +378,6 @@ class LANMessengerApp(ctk.CTk):
             btn.grid(row=0, column=1, padx=10, pady=10)
 
             self.private_chats[ip] = display
-        except Exception:
-            # Tab already exists
-            pass
 
         self.current_private_peer = ip
         self.tabview.set(tab_name)
