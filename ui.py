@@ -117,8 +117,8 @@ class LANMessengerApp(ctk.CTk):
              if peer_ip in self.private_chats:
                  self.load_private_chat(peer_ip)
              else:
-                 # Notification could be added here
-                 pass
+                 sender_name = self.peers.get(peer_ip, args[1])
+                 self.open_private_chat(peer_ip, sender_name)
         elif event_type in ['EDIT', 'DELETE']:
              self.load_chat_history()
 
