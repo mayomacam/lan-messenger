@@ -63,6 +63,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.peers = {} # ip -> username
         self.private_chats = {} # ip -> CTkTextbox
+        self.private_chat_tabs = {} # ip -> tab_name
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
