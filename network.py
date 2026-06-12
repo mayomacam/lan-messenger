@@ -4,6 +4,9 @@ import json
 import time
 import struct
 import hashlib
+import os
+import base64
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from ssl_utils import wrap_socket
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
@@ -111,6 +114,14 @@ class NetworkManager:
         self.callback = callback_update_ui
         self.auth_token = auth_token
         self.allowed_ips = allowed_ips
+        self.transit_cipher = None
+        if self.auth_token:
+            # Derive a transit key from the auth token
+            # In a real enterprise app, we'd use PBKDF2/Argon2,
+            # but for this P2P tool, we'll use a SHA256 of the token.
+            key = hashlib.sha256(self.auth_token.encode()).digest()
+            self.transit_cipher = AESGCM(key)
+
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.running = True
@@ -151,22 +162,39 @@ class NetworkManager:
         return data
 
     def _recv_json(self, sock):
-        """Receives a length-prefixed JSON packet."""
+        """Receives a length-prefixed JSON packet (optionally encrypted)."""
         raw_msglen = self._recv_all(sock, 4)
         if not raw_msglen:
             return None
         msglen = struct.unpack('>I', raw_msglen)[0]
-        # Safety limit: 1MB
         if msglen > 1024 * 1024:
             return None
         raw_data = self._recv_all(sock, msglen)
         if not raw_data:
             return None
-        return json.loads(raw_data.decode())
+
+        try:
+            if self.transit_cipher:
+                # Decrypt transit data
+                decoded = base64.b64decode(raw_data)
+                nonce = decoded[:12]
+                ciphertext = decoded[12:]
+                decrypted = self.transit_cipher.decrypt(nonce, ciphertext, None)
+                return json.loads(decrypted.decode())
+            else:
+                return json.loads(raw_data.decode())
+        except Exception as e:
+            print(f"[DEBUG] Transit decryption error: {e}")
+            return None
 
     def _send_json(self, sock, data):
-        """Sends a length-prefixed JSON packet."""
+        """Sends a length-prefixed JSON packet (optionally encrypted)."""
         serialized = json.dumps(data).encode()
+        if self.transit_cipher:
+            nonce = os.urandom(12)
+            ciphertext = self.transit_cipher.encrypt(nonce, serialized, None)
+            serialized = base64.b64encode(nonce + ciphertext)
+
         sock.sendall(struct.pack('>I', len(serialized)) + serialized)
 
     def handle_client(self, client, addr):

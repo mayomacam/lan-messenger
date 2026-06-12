@@ -442,7 +442,8 @@ class LANMessengerApp(ctk.CTk):
         if path:
             filename = os.path.basename(path)
             size = os.path.getsize(path)
-            self.db.add_file(filename, path, size, "127.0.0.1", is_folder=False)
+            local_ip = socket.gethostbyname(socket.gethostname())
+            self.db.add_file(filename, path, size, local_ip, is_folder=False)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
@@ -461,7 +462,8 @@ class LANMessengerApp(ctk.CTk):
         if path:
             dirname = os.path.basename(path)
             size = self.get_folder_size(path)
-            self.db.add_file(dirname, path, size, "127.0.0.1", is_folder=True)
+            local_ip = socket.gethostbyname(socket.gethostname())
+            self.db.add_file(dirname, path, size, local_ip, is_folder=True)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
