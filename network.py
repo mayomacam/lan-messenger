@@ -214,15 +214,11 @@ class NetworkManager:
             if not data:
                 return
 
-            print(f"[DEBUG] Received data from {addr}: {data}")
-            try:
-                if not isinstance(data, dict):
-                    if logger: logger.log("SECURITY_ALERT", f"Malformed packet from {addr[0]}: Not a JSON object.")
-                    return
-            except json.JSONDecodeError:
-                if logger: logger.log("SECURITY_ALERT", f"Malformed packet from {addr[0]}: Invalid JSON.")
-                print(f"[DEBUG] Failed to decode JSON from {addr}")
+            if not isinstance(data, dict):
+                if logger: logger.log("SECURITY_ALERT", f"Malformed packet from {addr[0]}: Not a JSON object.")
                 return
+
+            print(f"[DEBUG] Received data from {addr}: {data}")
 
             # Token verification
             if self.auth_token is not None:

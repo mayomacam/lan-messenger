@@ -3,11 +3,26 @@ import threading
 import os
 import json
 import time
+import hashlib
 from pathlib import Path
 from ssl_utils import wrap_socket
 import audit
 
 class FileTransferManager:
+    @staticmethod
+    def calculate_sha256(filepath):
+        """Calculate the SHA-256 hash of a file."""
+        sha256_hash = hashlib.sha256()
+        try:
+            with open(filepath, "rb") as f:
+                # Read and update hash string value in blocks of 64K
+                for byte_block in iter(lambda: f.read(65536), b""):
+                    sha256_hash.update(byte_block)
+            return sha256_hash.hexdigest()
+        except Exception as e:
+            print(f"[DEBUG] Error calculating hash for {filepath}: {e}")
+            return None
+
     def __init__(self, db, port, save_dir="downloads", bind_ip="0.0.0.0", auth_token=None, allowed_ips=None):
         """Initialize the file transfer manager.
         Parameters:
@@ -98,7 +113,9 @@ class FileTransferManager:
 
             elif cmd == 'PULL_FILE':
                 path = req.get('path')
-                if not isinstance(path, str): return
+                if not isinstance(path, str):
+                    if logger: logger.log("SECURITY_ALERT", f"Malformed PULL_FILE request from {addr[0]}: path must be a string.")
+                    return
                 # Sanitize path to prevent directory traversal
                 if ".." in path or os.path.isabs(path) or path.startswith("/") or path.startswith("\\"):
                     if logger: logger.log("SECURITY_ALERT", f"Blocked potential directory traversal attempt from {addr[0]}: {path}")
@@ -124,12 +141,14 @@ class FileTransferManager:
                 files = self.db.get_files()
                 file_list = []
                 for f in files:
+                    # f structure: (id, filename, path, size, owner_ip, is_folder, checksum)
                     file_list.append({
                         'filename': f[1],
                         'path': f[2],
                         'size': f[3],
                         'is_folder': f[5],
-                        'owner': f[4]
+                        'owner': f[4],
+                        'checksum': f[6] if len(f) > 6 else None
                     })
                 data_encoded = json.dumps(file_list).encode()
                 client.sendall(json.dumps({'status': 'OK', 'size': len(data_encoded)}).encode())
@@ -139,6 +158,9 @@ class FileTransferManager:
             elif cmd == 'LIST_FOLDER':
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 path_str = req.get('path')
+                if not isinstance(path_str, str):
+                    if logger: logger.log("SECURITY_ALERT", f"Malformed LIST_FOLDER request from {addr[0]}: path must be a string.")
+                    return
                 base_path = Path(path_str)
                 if base_path.exists() and base_path.is_dir():
                     entries = []
@@ -148,7 +170,8 @@ class FileTransferManager:
                             entries.append({
                                 'type': 'file',
                                 'rel_path': rel_path,
-                                'size': entry.stat().st_size
+                                'size': entry.stat().st_size,
+                                'checksum': self.calculate_sha256(str(entry))
                             })
                         elif entry.is_dir():
                             entries.append({
@@ -185,7 +208,7 @@ class FileTransferManager:
                 received += len(data)
         print(f"[DEBUG] Received {filename}")
 
-    def download_file(self, target_ip, remote_path):
+    def download_file(self, target_ip, remote_path, expected_checksum=None):
         filename = os.path.basename(remote_path)
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
@@ -202,6 +225,18 @@ class FileTransferManager:
                     size = resp.get('size')
                     s.sendall(b'ACK')
                     self.receive_stream(s, filename, size)
+
+                    # Verify integrity
+                    local_path = os.path.join(self.save_dir, filename)
+                    if expected_checksum:
+                        actual_checksum = self.calculate_sha256(local_path)
+                        logger = audit.get_logger()
+                        if actual_checksum == expected_checksum:
+                            print(f"[DEBUG] Integrity verified for {filename}")
+                            if logger: logger.log("FILE_INTEGRITY_SUCCESS", f"File: {filename}, Hash: {actual_checksum}")
+                        else:
+                            print(f"[DEBUG] Integrity FAILURE for {filename}")
+                            if logger: logger.log("FILE_INTEGRITY_FAILURE", f"File: {filename}, Expected: {expected_checksum}, Got: {actual_checksum}")
                 else:
                     print(f"[DEBUG] Download failed: {resp.get('msg')}")
         except Exception as e:
@@ -241,6 +276,7 @@ class FileTransferManager:
             total_files = len(files)
             for idx, item in enumerate(files, start=1):
                 rel_path = item['rel_path']
+                expected_checksum = item.get('checksum')
                 full_remote_path = os.path.join(remote_path, rel_path)
                 # Notify start
                 if progress_callback:
@@ -252,7 +288,8 @@ class FileTransferManager:
                 success = self._download_file_direct(target_ip, full_remote_path, folder_name, rel_path,
                                                     per_file_cb=progress_callback,
                                                     overall_index=idx,
-                                                    overall_total=total_files)
+                                                    overall_total=total_files,
+                                                    expected_checksum=expected_checksum)
                 # Notify end
                 if progress_callback:
                     try:
@@ -264,7 +301,7 @@ class FileTransferManager:
             print(f"[DEBUG] Folder download error: {e}")
 
     def _download_file_direct(self, target_ip, remote_path, folder_name, rel_path,
-                            per_file_cb=None, overall_index=0, overall_total=1):
+                            per_file_cb=None, overall_index=0, overall_total=1, expected_checksum=None):
         """Download a single file with optional per‑file progress callback.
         Returns *True* on success, *False* on any error.
         Uses pathlib for cross‑platform path handling and includes auth token if set.
@@ -303,6 +340,19 @@ class FileTransferManager:
                                 except Exception as e:
                                     print(f"[DEBUG] Progress callback error (PROGRESS) for {rel_path}: {e}")
                     print(f"[DEBUG] Downloaded {rel_path}")
+
+                    # Verify integrity
+                    if expected_checksum:
+                        actual_checksum = self.calculate_sha256(str(local_path))
+                        logger = audit.get_logger()
+                        if actual_checksum == expected_checksum:
+                            print(f"[DEBUG] Integrity verified for {rel_path}")
+                            if logger: logger.log("FILE_INTEGRITY_SUCCESS", f"File: {rel_path}, Hash: {actual_checksum}")
+                        else:
+                            print(f"[DEBUG] Integrity FAILURE for {rel_path}")
+                            if logger: logger.log("FILE_INTEGRITY_FAILURE", f"File: {rel_path}, Expected: {expected_checksum}, Got: {actual_checksum}")
+                            return False # Consider integrity failure a download failure
+
                     return True
                 else:
                     print(f"[DEBUG] File {rel_path} download error: {resp.get('msg')}")
