@@ -19,12 +19,17 @@ class EncryptionManager:
                 return f.read()
         else:
             key = AESGCM.generate_key(bit_length=256)
-            with open(self.key_file, "wb") as f:
-                f.write(key)
             try:
-                os.chmod(self.key_file, 0o600)
-            except:
-                pass
+                fd = os.open(self.key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with open(fd, "wb") as f:
+                    f.write(key)
+            except Exception:
+                with open(self.key_file, "wb") as f:
+                    f.write(key)
+                try:
+                    os.chmod(self.key_file, 0o600)
+                except Exception:
+                    pass
             return key
 
     def encrypt(self, data: str) -> str:
