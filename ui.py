@@ -311,7 +311,7 @@ class LANMessengerApp(ctk.CTk):
 
         entry.bind("<Return>", connect)
         ctk.CTkButton(dialog, text="Connect", command=connect).pack(pady=20)
-        self.after(200, lambda: entry.focus_set())
+        self.after(200, lambda: entry.focus_set() if entry.winfo_exists() else None)
 
     def try_manual_connect(self, ip):
         success = self.network.send_hello(ip, self.username)
