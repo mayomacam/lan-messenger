@@ -13,3 +13,7 @@
 ## 2026-06-12 - Enhancing workflow through focus management and guidance
 **Learning:** Automatically focusing input fields on view transitions (like app start or tab switches) and providing keyboard-driven actions (like Enter to save) reduces cognitive load and physical effort for users. Additionally, "empty states" in dynamic lists prevent confusion by confirming the app is working even when no data is present.
 **Action:** Always identify primary input fields in every view/dialog and ensure they are focused automatically. Include helpful "empty state" labels for all dynamic collections.
+
+## 2026-06-13 - Context-aware focus and non-blocking feedback
+**Learning:** In multi-tabbed chat interfaces, focus should be maintained on the relevant input field when switching between conversations to ensure a seamless typing experience. Furthermore, using the button itself to provide success feedback (e.g., "Refreshed") for background refreshes provides a clean, modern alternative to intrusive popups.
+**Action:** Always map tab selections to their corresponding input widgets for automatic focusing. Use temporary button label/color shifts for non-disruptive interaction confirmation.

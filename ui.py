@@ -63,7 +63,9 @@ class LANMessengerApp(ctk.CTk):
 
         self.peers = {} # ip -> username
         self.private_chats = {} # ip -> CTkTextbox
-        self.private_chat_tabs = {} # ip -> tab_name
+        self.private_chat_tabs = {} # tab_name -> ip
+        self.private_entries = {} # ip -> CTkEntry
+        self._last_peers_snapshot = ""
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
@@ -133,6 +135,7 @@ class LANMessengerApp(ctk.CTk):
         username_frame = ctk.CTkFrame(self.sidebar_frame)
         username_frame.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
 
+        ctk.CTkLabel(username_frame, text="User:").pack(side="left", padx=(5, 2))
         self.username_entry = ctk.CTkEntry(username_frame, placeholder_text="Username")
         self.username_entry.insert(0, self.username)
         self.username_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
@@ -161,6 +164,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_tab = self.tabview.add("Global Chat")
         self.files_tab = self.tabview.add("Files")
+        self.audit_tab = self.tabview.add("Audit Logs")
 
         # -- Chat Tab --
         self.chat_tab.grid_columnconfigure(0, weight=1)
@@ -179,6 +183,21 @@ class LANMessengerApp(ctk.CTk):
 
         self.send_btn = ctk.CTkButton(self.input_frame, text="Send", width=100, command=self.send_message)
         self.send_btn.grid(row=0, column=1, padx=10, pady=10)
+
+        # -- Search Bar --
+        self.search_frame = ctk.CTkFrame(self.chat_tab)
+        self.search_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
+        self.search_frame.grid_columnconfigure(0, weight=1)
+
+        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
+        self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
+        self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
+
+        self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
+        self.search_btn.grid(row=0, column=1, padx=5, pady=5)
+
+        self.clear_search_btn = ctk.CTkButton(self.search_frame, text="X", width=30, fg_color="gray", command=self.clear_search)
+        self.clear_search_btn.grid(row=0, column=2, padx=5, pady=5)
 
         # Context Menu for Message Actions
         self.context_menu = Menu(self, tearoff=0)
@@ -238,6 +257,32 @@ class LANMessengerApp(ctk.CTk):
 
         self.file_checkboxes = [] # (checkbox_widget, file_data)
 
+        # -- Audit Tab --
+        self.audit_tab.grid_columnconfigure(0, weight=1)
+        self.audit_tab.grid_rowconfigure(0, weight=1)
+
+        self.audit_display = ctk.CTkTextbox(self.audit_tab, state="disabled")
+        self.audit_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+        self.audit_controls = ctk.CTkFrame(self.audit_tab)
+        self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+
+        self.refresh_audit_btn = ctk.CTkButton(self.audit_controls, text="Refresh Logs", command=self.load_audit_logs)
+        self.refresh_audit_btn.pack(pady=5)
+
+    def load_audit_logs(self):
+        logs = self.db.get_audit_logs(200)
+        self.audit_display.configure(state="normal")
+        self.audit_display.delete("1.0", "end")
+
+        for log in logs:
+            # log: (id, event_type, details, timestamp)
+            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+            self.audit_display.insert("end", f"[{ts}] {log[1]}: {log[2]}\n")
+
+        self.audit_display.configure(state="disabled")
+        self.audit_display.see("end")
+
     def update_username(self, event=None):
         new_name = self.username_entry.get().strip()
         if new_name and new_name != self.username:
@@ -268,6 +313,10 @@ class LANMessengerApp(ctk.CTk):
 
         for widget in self.peers_scroll.winfo_children():
             widget.destroy()
+
+        if not self.peers:
+            lbl = ctk.CTkLabel(self.peers_scroll, text="No peers found yet...", font=("Arial", 11, "italic"), text_color="gray")
+            lbl.pack(pady=20)
 
         for ip, name in self.peers.items():
             row = ctk.CTkFrame(self.peers_scroll)
@@ -316,27 +365,40 @@ class LANMessengerApp(ctk.CTk):
         def connect(event=None):
             ip = entry.get().strip()
             if ip:
-                # Send Hello
-                threading.Thread(target=self.try_manual_connect, args=(ip,), daemon=True).start()
-                dialog.destroy()
+                connect_btn.configure(text="Connecting...", state="disabled")
+                threading.Thread(target=self.try_manual_connect, args=(ip, dialog, connect_btn), daemon=True).start()
 
         entry.bind("<Return>", connect)
-        ctk.CTkButton(dialog, text="Connect", command=connect).pack(pady=20)
+        connect_btn = ctk.CTkButton(dialog, text="Connect", command=connect)
+        connect_btn.pack(pady=20)
         self.after(200, lambda: entry.focus_set() if entry.winfo_exists() else None)
 
-    def try_manual_connect(self, ip):
+    def try_manual_connect(self, ip, dialog, btn):
         success = self.network.send_hello(ip, self.username)
-        if success:
-           self.after(0, lambda: messagebox.showinfo("Connected", f"Sent handshake to {ip}. Waiting for response..."))
-        else:
-           self.after(0, lambda: messagebox.showerror("Connection Failed", f"Could not connect to {ip}"))
+        def update_ui():
+            if not btn.winfo_exists(): return
+            if success:
+                btn.configure(text="Handshake Sent!", fg_color="#2ecc71")
+                self.after(2000, lambda: dialog.destroy() if dialog.winfo_exists() else None)
+            else:
+                btn.configure(text="Failed", fg_color="#e74c3c", state="normal")
+                self.after(2000, lambda: btn.configure(text="Connect", fg_color=("#3B8ED0", "#1F6AA5")) if btn.winfo_exists() else None)
+        self.after(0, update_ui)
 
     def on_tab_change(self):
-        if self.tabview.get() == "Global Chat":
+        tab = self.tabview.get()
+        if tab == "Global Chat":
             self.msg_entry.focus_set()
+        elif tab.startswith("Chat: "):
+            peer_ip = self.private_chat_tabs.get(tab)
+            if peer_ip:
+                self.current_private_peer = peer_ip
+                if peer_ip in self.private_entries:
+                    self.private_entries[peer_ip].focus_set()
 
     def load_chat_history(self):
-        messages = self.db.get_messages(100)
+        query = self.search_entry.get().strip().lower()
+        messages = self.db.get_messages(200)
         self.chat_display.configure(state="normal")
         self.chat_display.delete("1.0", "end")
 
@@ -344,6 +406,11 @@ class LANMessengerApp(ctk.CTk):
         for msg in messages:
             sender = msg[1]
             content = msg[2]
+
+            # Decrypted search
+            if query and query not in content.lower() and query not in sender.lower():
+                continue
+
             ts = time.strftime('%H:%M', time.localtime(msg[3]))
             lines.append(f"[{ts}] {sender}: {content}")
 
@@ -378,10 +445,19 @@ class LANMessengerApp(ctk.CTk):
         self.load_chat_history()
 
     def open_private_chat(self, ip, name):
-        tab_name = f"Chat: {name}"
-        # Check if tab already exists
-        all_tabs = self.tabview._tab_dict.keys()
-        if tab_name not in all_tabs:
+        # Find if we already have a tab for this IP
+        tab_name = None
+        for tname, tip in self.private_chat_tabs.items():
+            if tip == ip:
+                tab_name = tname
+                break
+
+        if not tab_name:
+            tab_name = f"Chat: {name}"
+            # Handle name collisions
+            if tab_name in self.tabview._tab_dict.keys():
+                tab_name = f"Chat: {name} ({ip})"
+
             self.tabview.add(tab_name)
             # Create UI for the new tab
             tab_frame = self.tabview.tab(tab_name)
@@ -415,6 +491,8 @@ class LANMessengerApp(ctk.CTk):
             btn.grid(row=0, column=1, padx=10, pady=10)
 
             self.private_chats[ip] = display
+            self.private_entries[ip] = entry
+            self.private_chat_tabs[tab_name] = ip
 
         self.current_private_peer = ip
         self.tabview.set(tab_name)
@@ -479,8 +557,9 @@ class LANMessengerApp(ctk.CTk):
         if path:
             filename = os.path.basename(path)
             size = os.path.getsize(path)
+            checksum = FileTransferManager.calculate_sha256(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            self.db.add_file(filename, path, size, local_ip, is_folder=False)
+            self.db.add_file(filename, path, size, local_ip, is_folder=False, checksum=checksum)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
@@ -516,6 +595,13 @@ class LANMessengerApp(ctk.CTk):
         self.tabview.set("Files")
         self.refresh_files_view()
     def refresh_files_view(self):
+        # Non-blocking success feedback
+        self.refresh_files_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        def reset():
+            if self.refresh_files_btn.winfo_exists():
+                self.refresh_files_btn.configure(text="Refresh", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(1500, reset)
+
         self.file_checkboxes = []
         for w in self.files_scroll.winfo_children():
             w.destroy()
@@ -524,7 +610,15 @@ class LANMessengerApp(ctk.CTk):
             files = self.db.get_files()
             file_data = []
             for f in files:
-                file_data.append({'filename': f[1], 'path': f[2], 'size': f[3], 'is_folder': f[5], 'owner': "Me"})
+                # f: (id, filename, path, size, owner_ip, is_folder, checksum)
+                file_data.append({
+                    'filename': f[1],
+                    'path': f[2],
+                    'size': f[3],
+                    'is_folder': f[5],
+                    'owner': "Me",
+                    'checksum': f[6] if len(f) > 6 else None
+                })
             self.render_file_list(file_data)
         else:
             self.download_btn.configure(state="normal")
@@ -542,6 +636,12 @@ class LANMessengerApp(ctk.CTk):
         for w in self.files_scroll.winfo_children():
             w.destroy()
         self.file_checkboxes = []
+
+        if not files:
+            msg = "No files shared yet..." if self.current_file_view_source == "Local" else "No files found on this peer."
+            lbl = ctk.CTkLabel(self.files_scroll, text=msg, font=("Arial", 12, "italic"), text_color="gray")
+            lbl.pack(pady=40)
+
         for f in files:
             row = ctk.CTkFrame(self.files_scroll)
             row.pack(fill="x", pady=2)
@@ -572,10 +672,14 @@ class LANMessengerApp(ctk.CTk):
                 else:
                     # For a single file, we wrap it in a mock folder download report logic if we want to share the same UI
                     # Or just call download_file. Let's make it consistent.
-                    self.file_manager.download_file(target_ip, f['path'])
+                    self.file_manager.download_file(target_ip, f['path'], expected_checksum=f.get('checksum'))
                     self.after(0, lambda p=f['filename']: self.progress_file_lbl.configure(text=f"Downloaded {p}"))
 
-            self.after(0, lambda: messagebox.showinfo("Download", "All selected items processed."))
+            def reset():
+                if self.download_btn.winfo_exists():
+                    self.download_btn.configure(text="Finished!", fg_color="#2ecc71")
+                    self.after(3000, lambda: self.download_btn.configure(text="Download Selected", fg_color="green") if self.download_btn.winfo_exists() else None)
+            self.after(0, reset)
             self.after(0, lambda: self.progress_file_lbl.configure(text="Idle"))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -624,14 +728,15 @@ class LANMessengerApp(ctk.CTk):
                 self.settings["tcp_file_port"] = int(entry_file.get())
                 self.settings["username"] = self.username
                 save_settings(self.settings)
-                messagebox.showinfo("Saved", "Settings saved. Please restart the application to apply changes.")
-                dialog.destroy()
+                save_btn.configure(text="Saved! Please Restart App", fg_color="#2ecc71")
+                self.after(2000, dialog.destroy)
             except ValueError:
                 messagebox.showerror("Error", "Ports must be numbers.")
 
         entry_chat.bind("<Return>", save)
         entry_file.bind("<Return>", save)
-        ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green").pack(pady=20)
+        save_btn = ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green")
+        save_btn.pack(pady=20)
         self.after(200, lambda: entry_chat.focus_set())
 
     def on_closing(self):

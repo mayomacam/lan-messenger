@@ -99,9 +99,16 @@ class Database:
                     path TEXT NOT NULL,
                     size INTEGER,
                     owner_ip TEXT NOT NULL,
-                    is_folder BOOLEAN DEFAULT 0
+                    is_folder BOOLEAN DEFAULT 0,
+                    checksum TEXT
                 )
             """)
+
+            # Migration: add checksum column to files table if it doesn't exist (for existing DBs)
+            cursor.execute("PRAGMA table_info(files)")
+            columns = [info[1] for info in cursor.fetchall()]
+            if 'checksum' not in columns:
+                cursor.execute("ALTER TABLE files ADD COLUMN checksum TEXT")
 
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
@@ -172,12 +179,12 @@ class Database:
             with self.conn:
                 self.conn.execute("UPDATE messages SET content = ? WHERE id = ?", (encrypted_content, msg_id))
 
-    def add_file(self, filename: str, path: str, size: int, owner_ip: str, is_folder: bool = False) -> str:
+    def add_file(self, filename: str, path: str, size: int, owner_ip: str, is_folder: bool = False, checksum: str = None) -> str:
         file_id = str(uuid.uuid4())
         with self.lock:
             with self.conn:
-                self.conn.execute("INSERT INTO files (id, filename, path, size, owner_ip, is_folder) VALUES (?, ?, ?, ?, ?, ?)",
-                                 (file_id, filename, path, size, owner_ip, is_folder))
+                self.conn.execute("INSERT INTO files (id, filename, path, size, owner_ip, is_folder, checksum) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                 (file_id, filename, path, size, owner_ip, is_folder, checksum))
         return file_id
 
     def get_files(self) -> List[Tuple]:
