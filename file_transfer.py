@@ -356,6 +356,11 @@ class FileTransferManager:
                         else:
                             print(f"[DEBUG] Integrity FAILURE for {rel_path}")
                             if logger: logger.log("FILE_INTEGRITY_FAILURE", f"File: {rel_path}, Expected: {expected_checksum}, Got: {actual_checksum}")
+                            try:
+                                local_path.unlink(missing_ok=True)
+                                print(f"[DEBUG] Deleted corrupted file: {rel_path}")
+                            except Exception as delete_err:
+                                print(f"[DEBUG] Failed to delete corrupted file {rel_path}: {delete_err}")
                             return False # Consider integrity failure a download failure
 
                     return True
