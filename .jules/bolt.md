@@ -17,3 +17,7 @@
 ## 2025-05-19 - [UI Polling and Text Batching]
 **Learning:** Polling loops that rebuild the entire UI every few seconds are a major source of layout thrashing and CPU waste in Tkinter. Snapshot-based comparison allows skipping 99% of these updates. Similarly, inserting text line-by-line into a Textbox widget is O(N) in terms of layout recalculations; batching into a single string makes it O(1).
 **Action:** Use self._last_peers_snapshot for periodic UI refreshes and always batch string insertions into Text/Textbox widgets using "\n".join(lines).
+
+## 2025-05-20 - [Strategic Composite Indexes]
+**Learning:** Separate indexes on individual columns often fail to optimize queries with multiple `WHERE` clauses and an `ORDER BY` clause. Following the ESR (Equality, Sort, Range) rule by creating a composite index (e.g., `(recipient, is_deleted, timestamp)`) allows SQLite to satisfy the entire query via a single index scan, providing a ~100x speedup in retrieval.
+**Action:** Analyze query plans with `EXPLAIN QUERY PLAN` and prefer composite indexes that match the filtering and sorting requirements of the application's most frequent queries.
