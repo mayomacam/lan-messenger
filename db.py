@@ -86,10 +86,11 @@ class Database:
             if 'recipient' not in columns:
                 cursor.execute("ALTER TABLE messages ADD COLUMN recipient TEXT")
 
-            # Composite index for faster message retrieval by deletion status and timestamp
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_deleted_timestamp ON messages(is_deleted, timestamp)")
-            # Index on recipient for faster private message retrieval
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient)")
+            # Optimized composite index for faster message retrieval by recipient, status, and timestamp
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient_deleted_ts ON messages(recipient, is_deleted, timestamp)")
+            # Drop old less efficient indexes
+            cursor.execute("DROP INDEX IF EXISTS idx_messages_deleted_timestamp")
+            cursor.execute("DROP INDEX IF EXISTS idx_messages_recipient")
             # Files table: id, filename, path, size, owner_ip, is_folder
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
