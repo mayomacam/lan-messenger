@@ -82,6 +82,24 @@ class LANMessengerApp(ctk.CTk):
         self.load_chat_history()
         self.after(100, lambda: self.msg_entry.focus_set())
 
+        # Start Message Reaper
+        self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
+        self.reaper_thread.start()
+
+    def message_reaper_loop(self):
+        while True:
+            try:
+                count = self.db.reap_expired_messages()
+                if count > 0:
+                    self.logger.log("DATA_RETENTION", f"Automatically reaped {count} expired messages.")
+                    self.after(0, self.load_chat_history)
+                    # Also reload private chat if open
+                    if self.current_private_peer:
+                        self.after(0, lambda p=self.current_private_peer: self.load_private_chat(p))
+            except Exception as e:
+                print(f"[DEBUG] Reaper error: {e}")
+            time.sleep(60)
+
     def prompt_username(self):
         dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
         name = dialog.get_input()
@@ -124,6 +142,9 @@ class LANMessengerApp(ctk.CTk):
                  self.open_private_chat(peer_ip, sender_name)
         elif event_type in ['EDIT', 'DELETE']:
              self.load_chat_history()
+        elif event_type == 'SECURITY_ALERT':
+             msg = args[0]
+             messagebox.showwarning("Security Alert", msg)
 
     def create_sidebar(self):
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
@@ -181,8 +202,13 @@ class LANMessengerApp(ctk.CTk):
         self.msg_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.msg_entry.bind("<Return>", self.send_message)
 
-        self.send_btn = ctk.CTkButton(self.input_frame, text="Send", width=100, command=self.send_message)
-        self.send_btn.grid(row=0, column=1, padx=10, pady=10)
+        # TTL Option
+        self.ttl_var = ctk.StringVar(value="Off")
+        self.ttl_dropdown = ctk.CTkOptionMenu(self.input_frame, values=["Off", "1m", "1h", "1d"], variable=self.ttl_var, width=70)
+        self.ttl_dropdown.grid(row=0, column=1, padx=5, pady=10)
+
+        self.send_btn = ctk.CTkButton(self.input_frame, text="Send", width=80, command=self.send_message)
+        self.send_btn.grid(row=0, column=2, padx=10, pady=10)
 
         # -- Search Bar --
         self.search_frame = ctk.CTkFrame(self.chat_tab)
@@ -420,26 +446,36 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
+    def _get_ttl_seconds(self):
+        val = self.ttl_var.get()
+        if val == "1m": return 60
+        if val == "1h": return 3600
+        if val == "1d": return 86400
+        return None
+
     def send_message(self, event=None):
         msg = self.msg_entry.get()
         if not msg: return
+
+        ttl = self._get_ttl_seconds()
+        expires_at = (time.time() + ttl) if ttl else None
 
         # If we are in a private chat tab, send private message
         current_tab = self.tabview.get()
         if current_tab.startswith("Chat: "):
             peer_ip = self.current_private_peer
             if peer_ip:
-                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip)
-                threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True)).start()
+                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, expires_at=expires_at)
+                threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True, ttl)).start()
                 self.msg_entry.delete(0, "end")
                 self.load_private_chat(peer_ip)
                 return
 
         # Otherwise send global message
-        msg_id = self.db.add_message(self.username, msg)
+        msg_id = self.db.add_message(self.username, msg, expires_at=expires_at)
 
         for ip in self.peers:
-            threading.Thread(target=self.network.send_message, args=(ip, self.username, msg, msg_id)).start()
+            threading.Thread(target=self.network.send_message, args=(ip, self.username, msg, msg_id, False, ttl)).start()
 
         self.msg_entry.delete(0, "end")
         self.load_chat_history()
@@ -478,17 +514,32 @@ class LANMessengerApp(ctk.CTk):
             entry = ctk.CTkEntry(input_frame, placeholder_text=f"Message {name}...")
             entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
-            def send_priv(e=None, i=ip, ent=entry):
+            # Private TTL
+            priv_ttl_var = ctk.StringVar(value=self.ttl_var.get())
+            priv_ttl_dropdown = ctk.CTkOptionMenu(input_frame, values=["Off", "1m", "1h", "1d"], variable=priv_ttl_var, width=70)
+            priv_ttl_dropdown.grid(row=0, column=1, padx=5, pady=10)
+
+            def send_priv(e=None, i=ip, ent=entry, tvar=priv_ttl_var):
                 m = ent.get()
                 if not m: return
-                mid = self.db.add_message(self.username, m, recipient=i)
-                threading.Thread(target=self.network.send_message, args=(i, self.username, m, mid, True)).start()
+
+                # Get TTL
+                tval = tvar.get()
+                ttl_sec = None
+                if tval == "1m": ttl_sec = 60
+                elif tval == "1h": ttl_sec = 3600
+                elif tval == "1d": ttl_sec = 86400
+
+                exp_at = (time.time() + ttl_sec) if ttl_sec else None
+
+                mid = self.db.add_message(self.username, m, recipient=i, expires_at=exp_at)
+                threading.Thread(target=self.network.send_message, args=(i, self.username, m, mid, True, ttl_sec)).start()
                 ent.delete(0, "end")
                 self.load_private_chat(i)
 
             entry.bind("<Return>", send_priv)
-            btn = ctk.CTkButton(input_frame, text="Send", width=100, command=send_priv)
-            btn.grid(row=0, column=1, padx=10, pady=10)
+            btn = ctk.CTkButton(input_frame, text="Send", width=80, command=send_priv)
+            btn.grid(row=0, column=2, padx=10, pady=10)
 
             self.private_chats[ip] = display
             self.private_entries[ip] = entry

@@ -7,7 +7,7 @@ import hashlib
 import os
 import base64
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ssl_utils import wrap_socket
+from ssl_utils import wrap_socket, get_peer_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
@@ -142,6 +142,12 @@ class NetworkManager:
                 client, addr = self.server_sock.accept()
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
+
+                # TOFU: check peer fingerprint
+                fingerprint = get_peer_fingerprint(client)
+                if fingerprint:
+                    self._check_tofu(addr[0], fingerprint)
+
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except OSError as e:
                 if self.running:
@@ -197,6 +203,25 @@ class NetworkManager:
 
         sock.sendall(struct.pack('>I', len(serialized)) + serialized)
 
+    def _check_tofu(self, ip, fingerprint):
+        logger = audit.get_logger()
+        existing = self.db.get_trusted_peer(ip)
+        if existing:
+            old_fingerprint, _ = existing
+            if old_fingerprint != fingerprint:
+                msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {ip}! Possible Man-in-the-Middle attack."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                if self.callback: self.callback('SECURITY_ALERT', msg)
+            else:
+                # Update last seen
+                self.db.add_trusted_peer(ip, fingerprint)
+        else:
+            # Trust on first use
+            self.db.add_trusted_peer(ip, fingerprint)
+            msg = f"New peer {ip} trusted with fingerprint {fingerprint[:16]}..."
+            if logger: logger.log("TOFU_TRUST", msg)
+
     def handle_client(self, client, addr):
         """Process incoming client packets with optional IP whitelist and token verification."""
         logger = audit.get_logger()
@@ -244,21 +269,25 @@ class NetworkManager:
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
+                ttl = data.get('ttl')
                 if not all(isinstance(x, str) for x in [sender, content, msg_id]):
                     return
                 timestamp = time.time()
-                self.db.add_received_message(msg_id, sender, content, timestamp)
+                expires_at = (timestamp + ttl) if isinstance(ttl, (int, float)) else None
+                self.db.add_received_message(msg_id, sender, content, timestamp, expires_at=expires_at)
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
             elif msg_type == 'MSG_PRIV':
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
+                ttl = data.get('ttl')
                 if not all(isinstance(x, str) for x in [sender, content, msg_id]):
                     return
                 timestamp = time.time()
+                expires_at = (timestamp + ttl) if isinstance(ttl, (int, float)) else None
                 # Store with recipient = sender's IP so we can filter by peer_ip later
-                self.db.add_received_message(msg_id, sender, content, timestamp, recipient=addr[0])
+                self.db.add_received_message(msg_id, sender, content, timestamp, recipient=addr[0], expires_at=expires_at)
                 if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])
 
             elif msg_type == 'MSG_EDIT':
@@ -291,6 +320,12 @@ class NetworkManager:
                 raw.settimeout(5)
                 raw.connect((target_ip, self.port))
                 s = wrap_socket(raw)
+
+                # TOFU check on outbound too
+                fingerprint = get_peer_fingerprint(s)
+                if fingerprint:
+                    self._check_tofu(target_ip, fingerprint)
+
                 self._send_json(s, packet)
                 return True
         except Exception as e:
@@ -300,14 +335,17 @@ class NetworkManager:
     def send_hello(self, target_ip, my_username):
         return self._send_packet(target_ip, {'type': 'HELLO', 'username': my_username})
 
-    def send_message(self, target_ip, sender_name, content, msg_id, is_private=False):
+    def send_message(self, target_ip, sender_name, content, msg_id, is_private=False, ttl=None):
         msg_type = 'MSG_PRIV' if is_private else 'MSG'
-        self._send_packet(target_ip, {
+        packet = {
             'type': msg_type,
             'sender': sender_name,
             'content': content,
             'id': msg_id
-        })
+        }
+        if ttl:
+            packet['ttl'] = ttl
+        self._send_packet(target_ip, packet)
 
     def send_edit(self, target_ip, msg_id, new_content):
         self._send_packet(target_ip, {
