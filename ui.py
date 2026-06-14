@@ -22,6 +22,8 @@ class LANMessengerApp(ctk.CTk):
         self.title("LAN Messenger")
         self.geometry("1100x700")
 
+        self._search_after_id = None
+
         # Load Settings
         self.settings = load_settings()
 
@@ -172,6 +174,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self.chat_display.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -191,7 +194,8 @@ class LANMessengerApp(ctk.CTk):
 
         self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
-        self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
+        self.search_entry.bind("<Return>", self.load_chat_history)
+        self.search_entry.bind("<KeyRelease>", self.load_chat_history)
 
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
@@ -389,6 +393,8 @@ class LANMessengerApp(ctk.CTk):
         tab = self.tabview.get()
         if tab == "Global Chat":
             self.msg_entry.focus_set()
+        elif tab == "Audit Logs":
+            self.load_audit_logs()
         elif tab.startswith("Chat: "):
             peer_ip = self.private_chat_tabs.get(tab)
             if peer_ip:
@@ -396,7 +402,21 @@ class LANMessengerApp(ctk.CTk):
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
 
-    def load_chat_history(self):
+    def clear_search(self):
+        self.search_entry.delete(0, "end")
+        self.load_chat_history()
+        self.search_entry.focus_set()
+
+    def load_chat_history(self, event=None):
+        if event and event.type == "3": # KeyRelease (tk.EventType.KeyRelease)
+            if self._search_after_id:
+                self.after_cancel(self._search_after_id)
+            self._search_after_id = self.after(300, self._perform_search)
+        else:
+            self._perform_search()
+
+    def _perform_search(self):
+        self._search_after_id = None
         query = self.search_entry.get().strip().lower()
         messages = self.db.get_messages(200)
         self.chat_display.configure(state="normal")
@@ -413,6 +433,12 @@ class LANMessengerApp(ctk.CTk):
 
             ts = time.strftime('%H:%M', time.localtime(msg[3]))
             lines.append(f"[{ts}] {sender}: {content}")
+
+        if query:
+            if lines:
+                self.chat_display.insert("end", f"--- Found {len(lines)} results for '{query}' ---\n\n", "search_info")
+            else:
+                self.chat_display.insert("end", f"--- No results found for '{query}' ---\n", "search_info")
 
         if lines:
             self.chat_display.insert("end", "\n".join(lines) + "\n")
