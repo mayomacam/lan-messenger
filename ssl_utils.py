@@ -1,5 +1,6 @@
 import ssl
 import socket
+import hashlib
 from pathlib import Path
 
 # Global cache for SSL contexts to avoid expensive re-creation overhead (saves ~1.5ms per connection)
@@ -35,3 +36,14 @@ def wrap_socket(sock: socket.socket, server_side: bool = False) -> ssl.SSLSocket
     """Wraps a raw socket with a cached TLS context."""
     ctx = get_ssl_context(server_side)
     return ctx.wrap_socket(sock, server_side=server_side)
+
+def get_peer_fingerprint(sslsock: ssl.SSLSocket) -> str:
+    """Extracts the SHA-256 fingerprint of the peer's certificate."""
+    try:
+        cert_der = sslsock.getpeercert(binary_form=True)
+        if not cert_der:
+            return None
+        return hashlib.sha256(cert_der).hexdigest()
+    except Exception as e:
+        print(f"[DEBUG] Failed to get peer fingerprint: {e}")
+        return None

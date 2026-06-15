@@ -79,6 +79,7 @@ class LANMessengerApp(ctk.CTk):
 
         # Periodic Updates
         self.after(2000, self.refresh_peers)
+        self.after(60000, self.background_reaper) # Every 60s
         self.load_chat_history()
         self.after(100, lambda: self.msg_entry.focus_set())
 
@@ -99,8 +100,23 @@ class LANMessengerApp(ctk.CTk):
         # Dispatch to main thread
         self.after(0, lambda: self._handle_event(event_type, *args))
 
+    def background_reaper(self):
+        """Periodically remove expired messages and refresh UI."""
+        self.db.reap_expired_messages()
+        self.load_chat_history()
+        for ip in list(self.private_chats.keys()):
+            self.load_private_chat(ip)
+        self.after(60000, self.background_reaper)
+
     def _handle_event(self, event_type, *args):
-        if event_type == 'NEW_PEER':
+        if event_type == 'TRUST_WARNING':
+             peer_ip, new_fp, old_fp = args[0], args[1], args[2]
+             messagebox.showwarning("Security Warning",
+                 f"Certificate mismatch for {peer_ip}!\n\n"
+                 f"Stored: {old_fp[:16]}...\n"
+                 f"Received: {new_fp[:16]}...\n\n"
+                 "This could be a Man-in-the-Middle attack or the peer has re-generated their certificate.")
+        elif event_type == 'NEW_PEER':
             ip, name = args[0], args[1]
 
             # Check if this is a NEW peer (not just a name update)
@@ -181,8 +197,14 @@ class LANMessengerApp(ctk.CTk):
         self.msg_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.msg_entry.bind("<Return>", self.send_message)
 
-        self.send_btn = ctk.CTkButton(self.input_frame, text="Send", width=100, command=self.send_message)
-        self.send_btn.grid(row=0, column=1, padx=10, pady=10)
+        # TTL Selector
+        self.ttl_var = ctk.StringVar(value="No Expiry")
+        self.ttl_menu = ctk.CTkOptionMenu(self.input_frame, values=["No Expiry", "1 min", "1 hour", "1 day"],
+                                         variable=self.ttl_var, width=100)
+        self.ttl_menu.grid(row=0, column=1, padx=5, pady=10)
+
+        self.send_btn = ctk.CTkButton(self.input_frame, text="Send", width=80, command=self.send_message)
+        self.send_btn.grid(row=0, column=2, padx=10, pady=10)
 
         # -- Search Bar --
         self.search_frame = ctk.CTkFrame(self.chat_tab)
@@ -396,6 +418,10 @@ class LANMessengerApp(ctk.CTk):
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
 
+    def clear_search(self):
+        self.search_entry.delete(0, "end")
+        self.load_chat_history()
+
     def load_chat_history(self):
         query = self.search_entry.get().strip().lower()
         messages = self.db.get_messages(200)
@@ -420,26 +446,35 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
+    def get_selected_ttl(self):
+        val = self.ttl_var.get()
+        if val == "1 min": return 60
+        if val == "1 hour": return 3600
+        if val == "1 day": return 86400
+        return None
+
     def send_message(self, event=None):
         msg = self.msg_entry.get()
         if not msg: return
+        ttl = self.get_selected_ttl()
+        expires_at = time.time() + ttl if ttl else None
 
         # If we are in a private chat tab, send private message
         current_tab = self.tabview.get()
         if current_tab.startswith("Chat: "):
             peer_ip = self.current_private_peer
             if peer_ip:
-                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip)
-                threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True)).start()
+                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, expires_at=expires_at)
+                threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True, ttl)).start()
                 self.msg_entry.delete(0, "end")
                 self.load_private_chat(peer_ip)
                 return
 
         # Otherwise send global message
-        msg_id = self.db.add_message(self.username, msg)
+        msg_id = self.db.add_message(self.username, msg, expires_at=expires_at)
 
         for ip in self.peers:
-            threading.Thread(target=self.network.send_message, args=(ip, self.username, msg, msg_id)).start()
+            threading.Thread(target=self.network.send_message, args=(ip, self.username, msg, msg_id, False, ttl)).start()
 
         self.msg_entry.delete(0, "end")
         self.load_chat_history()

@@ -69,7 +69,7 @@ class Database:
     def create_tables(self):
         with self.lock:
             cursor = self.conn.cursor()
-            # Messages table: id, sender, content, timestamp, is_deleted, recipient
+            # Messages table: id, sender, content, timestamp, is_deleted, recipient, expires_at
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS messages (
                     id TEXT PRIMARY KEY,
@@ -77,7 +77,8 @@ class Database:
                     content TEXT,
                     timestamp REAL NOT NULL,
                     is_deleted BOOLEAN DEFAULT 0,
-                    recipient TEXT
+                    recipient TEXT,
+                    expires_at REAL
                 )
             """)
             # Migration: add recipient column if it doesn't exist
@@ -85,9 +86,12 @@ class Database:
             columns = [info[1] for info in cursor.fetchall()]
             if 'recipient' not in columns:
                 cursor.execute("ALTER TABLE messages ADD COLUMN recipient TEXT")
+            if 'expires_at' not in columns:
+                cursor.execute("ALTER TABLE messages ADD COLUMN expires_at REAL")
 
             # Optimized composite index for faster message retrieval by recipient, status, and timestamp
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient_deleted_ts ON messages(recipient, is_deleted, timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at)")
             # Drop old less efficient indexes
             cursor.execute("DROP INDEX IF EXISTS idx_messages_deleted_timestamp")
             cursor.execute("DROP INDEX IF EXISTS idx_messages_recipient")
@@ -119,25 +123,34 @@ class Database:
                     timestamp REAL NOT NULL
                 )
             """)
+
+            # Trusted Peers table: ip, fingerprint, last_seen
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trusted_peers (
+                    ip TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL,
+                    last_seen REAL NOT NULL
+                )
+            """)
             self.conn.commit()
 
-    def add_message(self, sender: str, content: str, recipient: str = None) -> str:
+    def add_message(self, sender: str, content: str, recipient: str = None, expires_at: float = None) -> str:
         msg_id = str(uuid.uuid4())
         timestamp = time.time()
         encrypted_content = self.cipher.encrypt(content)
         with self.lock:
             # Use connection as context manager for automatic commit/rollback
             with self.conn:
-                self.conn.execute("INSERT INTO messages (id, sender, content, timestamp, recipient) VALUES (?, ?, ?, ?, ?)",
-                                 (msg_id, sender, encrypted_content, timestamp, recipient))
+                self.conn.execute("INSERT INTO messages (id, sender, content, timestamp, recipient, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+                                 (msg_id, sender, encrypted_content, timestamp, recipient, expires_at))
         return msg_id
 
-    def add_received_message(self, msg_id: str, sender: str, content: str, timestamp: float, recipient: str = None):
+    def add_received_message(self, msg_id: str, sender: str, content: str, timestamp: float, recipient: str = None, expires_at: float = None):
         encrypted_content = self.cipher.encrypt(content)
         with self.lock:
             with self.conn:
-                self.conn.execute("INSERT OR IGNORE INTO messages (id, sender, content, timestamp, recipient) VALUES (?, ?, ?, ?, ?)",
-                                 (msg_id, sender, encrypted_content, timestamp, recipient))
+                self.conn.execute("INSERT OR IGNORE INTO messages (id, sender, content, timestamp, recipient, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+                                 (msg_id, sender, encrypted_content, timestamp, recipient, expires_at))
 
     def get_messages(self, limit=50, peer_ip: str = None) -> List[Tuple]:
         # Get last 'limit' messages that are not deleted
@@ -203,6 +216,27 @@ class Database:
         with self.lock:
             cursor = self.conn.execute("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT ?", (limit,))
             return cursor.fetchall()
+
+    def reap_expired_messages(self):
+        now = time.time()
+        with self.lock:
+            with self.conn:
+                # We could just mark as deleted or hard delete. Hard delete for ephemeral messages.
+                self.conn.execute("DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
+
+    def get_peer_trust_info(self, ip: str) -> Tuple[str, float]:
+        with self.lock:
+            cursor = self.conn.execute("SELECT fingerprint, last_seen FROM trusted_peers WHERE ip = ?", (ip,))
+            return cursor.fetchone()
+
+    def add_trusted_peer(self, ip: str, fingerprint: str):
+        now = time.time()
+        with self.lock:
+            with self.conn:
+                self.conn.execute("""
+                    INSERT OR REPLACE INTO trusted_peers (ip, fingerprint, last_seen)
+                    VALUES (?, ?, ?)
+                """, (ip, fingerprint, now))
 
     def close(self):
         self.conn.close()
