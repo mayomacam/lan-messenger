@@ -66,6 +66,7 @@ class LANMessengerApp(ctk.CTk):
         self.private_chat_tabs = {} # tab_name -> ip
         self.private_entries = {} # ip -> CTkEntry
         self._last_peers_snapshot = ""
+        self._search_timer = None
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
@@ -192,6 +193,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
+        self.search_entry.bind("<KeyRelease>", self.on_search_key)
 
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
@@ -389,6 +391,8 @@ class LANMessengerApp(ctk.CTk):
         tab = self.tabview.get()
         if tab == "Global Chat":
             self.msg_entry.focus_set()
+        elif tab == "Audit Logs":
+            self.load_audit_logs()
         elif tab.startswith("Chat: "):
             peer_ip = self.private_chat_tabs.get(tab)
             if peer_ip:
@@ -397,6 +401,10 @@ class LANMessengerApp(ctk.CTk):
                     self.private_entries[peer_ip].focus_set()
 
     def load_chat_history(self):
+        if self._search_timer:
+            self.after_cancel(self._search_timer)
+            self._search_timer = None
+
         query = self.search_entry.get().strip().lower()
         messages = self.db.get_messages(200)
         self.chat_display.configure(state="normal")
@@ -416,9 +424,24 @@ class LANMessengerApp(ctk.CTk):
 
         if lines:
             self.chat_display.insert("end", "\n".join(lines) + "\n")
+        elif query:
+            self.chat_display.insert("end", f"\n\nNo messages found matching '{query}'", "center")
+            self.chat_display.tag_config("center", justify='center')
+        elif not messages:
+            self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
+            self.chat_display.tag_config("center", justify='center')
 
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
+
+    def on_search_key(self, event):
+        if self._search_timer:
+            self.after_cancel(self._search_timer)
+        self._search_timer = self.after(300, self.load_chat_history)
+
+    def clear_search(self):
+        self.search_entry.delete(0, "end")
+        self.load_chat_history()
 
     def send_message(self, event=None):
         msg = self.msg_entry.get()
