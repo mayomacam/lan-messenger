@@ -66,6 +66,8 @@ class LANMessengerApp(ctk.CTk):
         self.private_chat_tabs = {} # tab_name -> ip
         self.private_entries = {} # ip -> CTkEntry
         self._last_peers_snapshot = ""
+        self._chat_history_after_id = None
+        self._private_chat_after_ids = {}
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
@@ -275,10 +277,14 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
+        lines = []
         for log in logs:
             # log: (id, event_type, details, timestamp)
             ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            self.audit_display.insert("end", f"[{ts}] {log[1]}: {log[2]}\n")
+            lines.append(f"[{ts}] {log[1]}: {log[2]}")
+
+        if lines:
+            self.audit_display.insert("end", "\n".join(lines) + "\n")
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("end")
@@ -396,7 +402,15 @@ class LANMessengerApp(ctk.CTk):
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
 
-    def load_chat_history(self):
+    def load_chat_history(self, debounce=True):
+        """Debounced global chat refresh to handle high-frequency events efficiently."""
+        if debounce:
+            if self._chat_history_after_id:
+                self.after_cancel(self._chat_history_after_id)
+            self._chat_history_after_id = self.after(100, lambda: self.load_chat_history(debounce=False))
+            return
+
+        self._chat_history_after_id = None
         query = self.search_entry.get().strip().lower()
         messages = self.db.get_messages(200)
         self.chat_display.configure(state="normal")
@@ -498,17 +512,32 @@ class LANMessengerApp(ctk.CTk):
         self.tabview.set(tab_name)
         self.load_private_chat(ip)
 
-    def load_private_chat(self, peer_ip):
+    def load_private_chat(self, peer_ip, debounce=True):
+        """Debounced private chat refresh with batched insertions."""
         if peer_ip not in self.private_chats: return
+
+        if debounce:
+            if peer_ip in self._private_chat_after_ids:
+                self.after_cancel(self._private_chat_after_ids[peer_ip])
+            self._private_chat_after_ids[peer_ip] = self.after(100, lambda: self.load_private_chat(peer_ip, debounce=False))
+            return
+
+        self._private_chat_after_ids.pop(peer_ip, None)
         messages = self.db.get_messages(100, peer_ip=peer_ip)
         display = self.private_chats[peer_ip]
         display.configure(state="normal")
         display.delete("1.0", "end")
+
+        lines = []
         for msg in messages:
             sender = msg[1]
             content = msg[2]
             ts = time.strftime('%H:%M', time.localtime(msg[3]))
-            display.insert("end", f"[{ts}] {sender}: {content}\n")
+            lines.append(f"[{ts}] {sender}: {content}")
+
+        if lines:
+            display.insert("end", "\n".join(lines) + "\n")
+
         display.configure(state="disabled")
         display.see("end")
 

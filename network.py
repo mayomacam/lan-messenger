@@ -152,14 +152,17 @@ class NetworkManager:
                 print(f"[DEBUG] Server accept error: {e}")
 
     def _recv_all(self, sock, n):
-        """Helper to receive exactly n bytes."""
-        data = b''
-        while len(data) < n:
-            packet = sock.recv(n - len(data))
+        """Helper to receive exactly n bytes using list accumulation for O(n) performance."""
+        chunks = []
+        received = 0
+        while received < n:
+            # Standardized 64KB buffer to reduce syscall overhead
+            packet = sock.recv(min(65536, n - received))
             if not packet:
                 return None
-            data += packet
-        return data
+            chunks.append(packet)
+            received += len(packet)
+        return b"".join(chunks)
 
     def _recv_json(self, sock):
         """Receives a length-prefixed JSON packet (optionally encrypted)."""
