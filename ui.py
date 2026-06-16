@@ -546,7 +546,7 @@ class LANMessengerApp(ctk.CTk):
             self.chat_display.tag_config("center", justify='center')
         elif not messages:
             self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
-            self.chat_display.tag_config("center", justify='center')
+            self.chat_display._textbox.tag_config("center", justify='center')
 
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
