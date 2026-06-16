@@ -287,10 +287,14 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
+        lines = []
         for log in logs:
             # log: (id, event_type, details, timestamp)
             ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            self.audit_display.insert("end", f"[{ts}] {log[1]}: {log[2]}\n")
+            lines.append(f"[{ts}] {log[1]}: {log[2]}")
+
+        if lines:
+            self.audit_display.insert("end", "\n".join(lines) + "\n")
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("end")
@@ -578,11 +582,17 @@ class LANMessengerApp(ctk.CTk):
         display = self.private_chats[peer_ip]
         display.configure(state="normal")
         display.delete("1.0", "end")
+
+        lines = []
         for msg in messages:
             sender = msg[1]
             content = msg[2]
             ts = time.strftime('%H:%M', time.localtime(msg[3]))
-            display.insert("end", f"[{ts}] {sender}: {content}\n")
+            lines.append(f"[{ts}] {sender}: {content}")
+
+        if lines:
+            display.insert("end", "\n".join(lines) + "\n")
+
         display.configure(state="disabled")
         display.see("end")
 

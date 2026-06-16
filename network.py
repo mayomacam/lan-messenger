@@ -182,13 +182,15 @@ class NetworkManager:
 
     def _recv_all(self, sock, n):
         """Helper to receive exactly n bytes."""
-        data = b''
-        while len(data) < n:
-            packet = sock.recv(n - len(data))
-            if not packet:
+        chunks = []
+        received = 0
+        while received < n:
+            chunk = sock.recv(n - received)
+            if not chunk:
                 return None
-            data += packet
-        return data
+            chunks.append(chunk)
+            received += len(chunk)
+        return b"".join(chunks)
 
     def _recv_json(self, sock):
         """Receives a length-prefixed JSON packet (optionally encrypted)."""
