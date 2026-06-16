@@ -312,7 +312,11 @@ class LANMessengerApp(ctk.CTk):
 
     def reap_messages(self):
         """Periodically remove expired messages from the database and refresh UI."""
-        self.db.delete_expired_messages()
+        deleted_count = self.db.delete_expired_messages()
+        if deleted_count == 0:
+            self.after(10000, self.reap_messages)
+            return
+
         # Only refresh if we are on a chat tab
         current_tab = self.tabview.get()
         if current_tab == "Global Chat":

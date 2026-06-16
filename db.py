@@ -209,12 +209,13 @@ class Database:
             cursor = self.conn.execute("SELECT * FROM files")
             return cursor.fetchall()
 
-    def delete_expired_messages(self):
-        """Purge messages that have passed their expiration time."""
+    def delete_expired_messages(self) -> int:
+        """Purge messages that have passed their expiration time. Returns count of deleted messages."""
         now = time.time()
         with self.lock:
             with self.conn:
-                self.conn.execute("DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
+                cursor = self.conn.execute("DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
+                return cursor.rowcount
 
     def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = 'untrusted'):
         now = time.time()
