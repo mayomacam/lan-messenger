@@ -213,9 +213,9 @@ class NetworkManager:
                         msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {addr[0]}! Potential Man-in-the-Middle attack."
                         print(f"[DEBUG] {msg}")
                         if logger: logger.log("SECURITY_ALERT", msg)
-                        # In a strict environment we might close the connection.
-                        # For now, we log it and continue, but UI should warn.
                         if self.callback: self.callback('TRUST_WARNING', addr[0], fingerprint, stored_fp)
+                        self._send_json(client, {'status': 'ERR', 'msg': 'Security alert: Certificate mismatch'})
+                        return
                 else:
                     # First time seeing this peer, trust them
                     self.db.add_trusted_peer(addr[0], fingerprint)
