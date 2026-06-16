@@ -7,7 +7,7 @@ import hashlib
 import os
 import base64
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ssl_utils import wrap_socket, get_peer_fingerprint
+from ssl_utils import wrap_socket, get_cert_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
@@ -127,6 +127,33 @@ class NetworkManager:
         self.running = True
         threading.Thread(target=self.start_server, daemon=True).start()
 
+    def _verify_peer_trust(self, sslsock, addr, username=None):
+        """Perform TOFU fingerprint verification."""
+        fingerprint = get_cert_fingerprint(sslsock)
+        if not fingerprint:
+            return True # No cert (could happen if not using TLS, though we should be)
+
+        peer_info = self.db.get_trusted_peer(addr[0])
+        logger = audit.get_logger()
+
+        if not peer_info:
+            # First time seeing this peer
+            self.db.add_trusted_peer(addr[0], username or "Unknown", fingerprint, 'untrusted')
+            if logger: logger.log("SECURITY_INFO", f"New peer {addr[0]} fingerprint recorded (TOFU).")
+            return True
+        else:
+            # Check if fingerprint matches
+            stored_fingerprint = peer_info[2]
+            if fingerprint != stored_fingerprint:
+                msg = f"SECURITY ALERT: Fingerprint mismatch for {addr[0]}! Potential MITM."
+                print(f"[WARNING] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                # We could block here, but for TOFU we usually warn and let the user decide.
+                # For SOC2 we should at least log and maybe update trust level.
+                self.db.update_peer_trust(addr[0], 'mismatch')
+                return False
+            return True
+
     def start_server(self):
         print(f"[DEBUG] Network Server starting...")
         try:
@@ -161,13 +188,15 @@ class NetworkManager:
 
     def _recv_all(self, sock, n):
         """Helper to receive exactly n bytes."""
-        data = b''
-        while len(data) < n:
-            packet = sock.recv(n - len(data))
-            if not packet:
+        chunks = []
+        received = 0
+        while received < n:
+            chunk = sock.recv(n - received)
+            if not chunk:
                 return None
-            data += packet
-        return data
+            chunks.append(chunk)
+            received += len(chunk)
+        return b"".join(chunks)
 
     def _recv_json(self, sock):
         """Receives a length-prefixed JSON packet (optionally encrypted)."""
@@ -277,7 +306,7 @@ class NetworkManager:
                 if not all(isinstance(x, str) for x in [sender, content, msg_id]):
                     return
                 timestamp = time.time()
-                expires_at = (timestamp + ttl) if isinstance(ttl, (int, float)) else None
+                expires_at = timestamp + ttl if isinstance(ttl, (int, float)) else None
                 self.db.add_received_message(msg_id, sender, content, timestamp, expires_at=expires_at)
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
@@ -289,7 +318,7 @@ class NetworkManager:
                 if not all(isinstance(x, str) for x in [sender, content, msg_id]):
                     return
                 timestamp = time.time()
-                expires_at = (timestamp + ttl) if isinstance(ttl, (int, float)) else None
+                expires_at = timestamp + ttl if isinstance(ttl, (int, float)) else None
                 # Store with recipient = sender's IP so we can filter by peer_ip later
                 self.db.add_received_message(msg_id, sender, content, timestamp, recipient=addr[0], expires_at=expires_at)
                 if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])

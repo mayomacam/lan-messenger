@@ -126,6 +126,17 @@ class Database:
             if 'checksum' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN checksum TEXT")
 
+            # Trusted Peers table: ip, username, fingerprint, trust_level, last_seen
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trusted_peers (
+                    ip TEXT PRIMARY KEY,
+                    username TEXT,
+                    fingerprint TEXT,
+                    trust_level TEXT DEFAULT 'untrusted',
+                    last_seen REAL
+                )
+            """)
+
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -137,9 +148,10 @@ class Database:
             """)
             self.conn.commit()
 
-    def add_message(self, sender: str, content: str, recipient: str = None, expires_at: float = None) -> str:
+    def add_message(self, sender: str, content: str, recipient: str = None, ttl: int = None) -> str:
         msg_id = str(uuid.uuid4())
         timestamp = time.time()
+        expires_at = timestamp + ttl if ttl else None
         encrypted_content = self.cipher.encrypt(content)
         with self.lock:
             # Use connection as context manager for automatic commit/rollback
@@ -181,7 +193,8 @@ class Database:
             decrypted_rows = []
             for row in rows:
                 decrypted_content = self.cipher.decrypt(row[2])
-                decrypted_rows.append((row[0], row[1], decrypted_content, row[3], row[4], row[5]))
+                # Return 7 columns now
+                decrypted_rows.append((row[0], row[1], decrypted_content, row[3], row[4], row[5], row[6]))
             return decrypted_rows[::-1]
 
     def delete_message(self, msg_id: str):
@@ -208,27 +221,36 @@ class Database:
             cursor = self.conn.execute("SELECT * FROM files")
             return cursor.fetchall()
 
-    def reap_expired_messages(self) -> int:
-        """Deletes messages that have passed their expiration timestamp."""
+    def delete_expired_messages(self) -> int:
+        """Purge messages that have passed their expiration time. Returns count of deleted messages."""
         now = time.time()
         with self.lock:
             with self.conn:
                 cursor = self.conn.execute("DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
                 return cursor.rowcount
 
-    def get_trusted_peer(self, ip: str) -> Tuple:
-        with self.lock:
-            cursor = self.conn.execute("SELECT fingerprint, last_seen FROM trusted_peers WHERE ip = ?", (ip,))
-            return cursor.fetchone()
-
-    def add_trusted_peer(self, ip: str, fingerprint: str):
+    def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = 'untrusted'):
         now = time.time()
         with self.lock:
             with self.conn:
                 self.conn.execute("""
-                    INSERT OR REPLACE INTO trusted_peers (ip, fingerprint, last_seen)
-                    VALUES (?, ?, ?)
-                """, (ip, fingerprint, now))
+                    INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(ip) DO UPDATE SET
+                        username=excluded.username,
+                        fingerprint=excluded.fingerprint,
+                        last_seen=excluded.last_seen
+                """, (ip, username, fingerprint, trust_level, now))
+
+    def get_trusted_peer(self, ip: str) -> Tuple:
+        with self.lock:
+            cursor = self.conn.execute("SELECT * FROM trusted_peers WHERE ip = ?", (ip,))
+            return cursor.fetchone()
+
+    def update_peer_trust(self, ip: str, trust_level: str):
+        with self.lock:
+            with self.conn:
+                self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
 
     def add_audit_log(self, event_type: str, details: str):
         timestamp = time.time()
