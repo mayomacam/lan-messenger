@@ -146,7 +146,9 @@ class NetworkManager:
                 # TOFU: check peer fingerprint
                 fingerprint = get_peer_fingerprint(client)
                 if fingerprint:
-                    self._check_tofu(addr[0], fingerprint)
+                    if not self._check_tofu(addr[0], fingerprint):
+                        client.close()
+                        continue
 
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except OSError as e:
