@@ -69,6 +69,8 @@ class LANMessengerApp(ctk.CTk):
         self.private_chat_tabs = {} # tab_name -> ip
         self.private_entries = {} # ip -> CTkEntry
         self._last_peers_snapshot = ""
+        self._search_timer = None
+        self._last_search_query = ""
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
@@ -228,8 +230,8 @@ class LANMessengerApp(ctk.CTk):
 
         self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
-        self.search_entry.bind("<Return>", self.load_chat_history)
-        self.search_entry.bind("<KeyRelease>", self.load_chat_history)
+        self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
+        self.search_entry.bind("<KeyRelease>", self.on_search_key)
 
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
@@ -485,6 +487,14 @@ class LANMessengerApp(ctk.CTk):
         self.load_chat_history()
 
     def load_chat_history(self):
+        if self._search_timer:
+            try:
+                self.after_cancel(self._search_timer)
+            except Exception:
+                pass
+            self._search_timer = None
+        self._last_search_query = self.search_entry.get().strip().lower()
+
         query = self.search_entry.get().strip().lower()
         messages = self.db.get_messages(200)
         self.chat_display.configure(state="normal")
@@ -510,6 +520,12 @@ class LANMessengerApp(ctk.CTk):
 
         if lines:
             self.chat_display.insert("end", "\n".join(lines) + "\n")
+        elif query:
+            self.chat_display.insert("end", f"\n\nNo messages found matching '{query}'", "center")
+            self.chat_display.tag_config("center", justify='center')
+        elif not messages:
+            self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
+            self.chat_display.tag_config("center", justify='center')
 
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
