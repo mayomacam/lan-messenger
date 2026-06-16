@@ -8,6 +8,7 @@ import time
 import shutil
 import json
 import audit
+from concurrent.futures import ThreadPoolExecutor
 from db import Database
 from network import NetworkManager, DiscoveryManager
 from file_transfer import FileTransferManager
@@ -38,6 +39,9 @@ class LANMessengerApp(ctk.CTk):
         audit.init_logger(self.db)
         self.logger = audit.get_logger()
         self.logger.log("APP_START", f"Application started for user {self.username}")
+
+        # Thread pool for non-blocking network calls
+        self.executor = ThreadPoolExecutor(max_workers=5)
 
         # Init Networking with Configured Ports
         # Initialize managers with security configuration from settings
@@ -121,7 +125,8 @@ class LANMessengerApp(ctk.CTk):
 
     def on_network_event(self, event_type, *args):
         # Dispatch to main thread
-        self.after(0, lambda: self._handle_event(event_type, *args))
+        if self.winfo_exists():
+            self.after(0, lambda: self._handle_event(event_type, *args))
 
     def _handle_event(self, event_type, *args):
         if event_type == 'NEW_PEER':
@@ -135,7 +140,7 @@ class LANMessengerApp(ctk.CTk):
 
             # Only send HELLO back if this was a new peer
             if is_new_peer:
-                threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
+                self.executor.submit(self.network.send_hello, ip, self.username)
         elif event_type == 'MSG':
              self.load_chat_history()
         elif event_type == 'MSG_PRIV':
@@ -340,7 +345,7 @@ class LANMessengerApp(ctk.CTk):
 
             # Notify all connected peers of name change
             for ip in self.peers:
-                threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
+                self.executor.submit(self.network.send_hello, ip, self.username)
 
             # Non-blocking success feedback
             self.change_name_btn.configure(text="Saved", fg_color="#2ecc71")
@@ -588,10 +593,6 @@ class LANMessengerApp(ctk.CTk):
             display = ctk.CTkTextbox(tab_frame, state="disabled")
             display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-            # We don't need a separate input per tab if we reuse the global msg_entry,
-            # but it's currently in Global Chat tab. Let's move msg_entry to a more global place?
-            # Or just add an input to each private tab.
-
             input_frame = ctk.CTkFrame(tab_frame, height=50)
             input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
             input_frame.grid_columnconfigure(0, weight=1)
@@ -693,7 +694,7 @@ class LANMessengerApp(ctk.CTk):
         if new_content:
             self.db.edit_message(msg_id, new_content)
             for ip in self.peers:
-                threading.Thread(target=self.network.send_edit, args=(ip, msg_id, new_content)).start()
+                self.executor.submit(self.network.send_edit, ip, msg_id, new_content)
             self.load_chat_history()
 
     def delete_last_message(self):
@@ -705,7 +706,7 @@ class LANMessengerApp(ctk.CTk):
         if messagebox.askyesno("Delete", "Delete this message?"):
             self.db.delete_message(msg_id)
             for ip in self.peers:
-                threading.Thread(target=self.network.send_delete, args=(ip, msg_id)).start()
+                self.executor.submit(self.network.send_delete, ip, msg_id)
             self.load_chat_history()
 
     def share_file(self):
@@ -854,7 +855,8 @@ class LANMessengerApp(ctk.CTk):
 
             self.overall_progress.set(overall_ratio)
 
-        self.after(0, update)
+        if self.winfo_exists():
+            self.after(0, update)
 
     def start_download(self, ip, path, is_folder):
         if is_folder:
@@ -901,6 +903,7 @@ class LANMessengerApp(ctk.CTk):
         self.network.close()
         self.file_manager.close()
         self.db.close()
+        self.executor.shutdown(wait=False)
         self.destroy()
 
 if __name__ == "__main__":

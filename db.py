@@ -264,5 +264,8 @@ class Database:
             cursor = self.conn.execute("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT ?", (limit,))
             return cursor.fetchall()
 
+    def reap_expired_messages(self) -> int:
+        return self.delete_expired_messages()
+
     def close(self):
         self.conn.close()

@@ -6,6 +6,7 @@ import struct
 import hashlib
 import os
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from ssl_utils import wrap_socket, get_cert_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
@@ -122,6 +123,7 @@ class NetworkManager:
             key = hashlib.sha256(self.auth_token.encode()).digest()
             self.transit_cipher = AESGCM(key)
 
+        self.executor = ThreadPoolExecutor(max_workers=20)
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.running = True
@@ -399,3 +401,4 @@ class NetworkManager:
             self.server_sock.close()
         except:
             pass
+        self.executor.shutdown(wait=False)
