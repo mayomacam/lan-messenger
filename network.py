@@ -240,7 +240,8 @@ class NetworkManager:
         logger = audit.get_logger()
         existing = self.db.get_trusted_peer(ip)
         if existing:
-            old_fingerprint, _ = existing
+            stored_username = existing[1]
+            old_fingerprint = existing[2]
             if old_fingerprint != fingerprint:
                 msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {ip}! Possible Man-in-the-Middle attack."
                 print(f"[DEBUG] {msg}")
@@ -249,10 +250,10 @@ class NetworkManager:
                 return False
             else:
                 # Update last seen
-                self.db.add_trusted_peer(ip, fingerprint)
+                self.db.add_trusted_peer(ip, stored_username or "Unknown", fingerprint)
         else:
             # Trust on first use
-            self.db.add_trusted_peer(ip, fingerprint)
+            self.db.add_trusted_peer(ip, "Unknown", fingerprint)
             msg = f"New peer {ip} trusted with fingerprint {fingerprint[:16]}..."
             if logger: logger.log("TOFU_TRUST", msg)
         return True
