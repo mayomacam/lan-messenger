@@ -169,8 +169,14 @@ class NetworkManager:
                 client, addr = self.server_sock.accept()
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
-                # Verify fingerprint immediately after TLS handshake
-                self._verify_peer_trust(client, addr)
+
+                # TOFU: check peer fingerprint
+                fingerprint = get_peer_fingerprint(client)
+                if fingerprint:
+                    if not self._check_tofu(addr[0], fingerprint):
+                        client.close()
+                        continue
+
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except OSError as e:
                 if self.running:
@@ -227,6 +233,27 @@ class NetworkManager:
             serialized = base64.b64encode(nonce + ciphertext)
 
         sock.sendall(struct.pack('>I', len(serialized)) + serialized)
+
+    def _check_tofu(self, ip, fingerprint) -> bool:
+        logger = audit.get_logger()
+        existing = self.db.get_trusted_peer(ip)
+        if existing:
+            old_fingerprint, _ = existing
+            if old_fingerprint != fingerprint:
+                msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {ip}! Possible Man-in-the-Middle attack."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                if self.callback: self.callback('SECURITY_ALERT', msg)
+                return False
+            else:
+                # Update last seen
+                self.db.add_trusted_peer(ip, fingerprint)
+        else:
+            # Trust on first use
+            self.db.add_trusted_peer(ip, fingerprint)
+            msg = f"New peer {ip} trusted with fingerprint {fingerprint[:16]}..."
+            if logger: logger.log("TOFU_TRUST", msg)
+        return True
 
     def handle_client(self, client, addr):
         """Process incoming client packets with optional IP whitelist and token verification."""
@@ -326,8 +353,12 @@ class NetworkManager:
                 raw.settimeout(5)
                 raw.connect((target_ip, self.port))
                 s = wrap_socket(raw)
-                # Verify fingerprint on outbound connection too
-                self._verify_peer_trust(s, (target_ip, self.port), packet.get('sender'))
+
+                # TOFU check on outbound too
+                fingerprint = get_peer_fingerprint(s)
+                if fingerprint:
+                    self._check_tofu(target_ip, fingerprint)
+
                 self._send_json(s, packet)
                 return True
         except Exception as e:

@@ -91,10 +91,22 @@ class Database:
 
             # Optimized composite index for faster message retrieval by recipient, status, and timestamp
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient_deleted_ts ON messages(recipient, is_deleted, timestamp)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at) WHERE expires_at IS NOT NULL")
+            # Index for expiring messages
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at)")
+
             # Drop old less efficient indexes
             cursor.execute("DROP INDEX IF EXISTS idx_messages_deleted_timestamp")
             cursor.execute("DROP INDEX IF EXISTS idx_messages_recipient")
+
+            # Trusted Peers table (TOFU)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trusted_peers (
+                    ip TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL,
+                    last_seen REAL NOT NULL
+                )
+            """)
+
             # Files table: id, filename, path, size, owner_ip, is_folder
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
@@ -156,10 +168,8 @@ class Database:
                                  (msg_id, sender, encrypted_content, timestamp, recipient, expires_at))
 
     def get_messages(self, limit=50, peer_ip: str = None) -> List[Tuple]:
-        # Get last 'limit' messages that are not deleted
-        # If peer_ip is provided, get private messages involving peer_ip
-        # (Both sent and received private messages are stored with recipient=peer_ip)
-        # Otherwise get global messages (recipient IS NULL)
+        # Get last 'limit' messages that are not deleted and not expired
+        now = time.time()
         with self.lock:
             if peer_ip:
                 cursor = self.conn.execute("""
@@ -167,15 +177,17 @@ class Database:
                     FROM messages
                     WHERE is_deleted = 0
                     AND recipient = ?
+                    AND (expires_at IS NULL OR expires_at > ?)
                     ORDER BY timestamp DESC LIMIT ?
-                """, (peer_ip, limit))
+                """, (peer_ip, now, limit))
             else:
                 cursor = self.conn.execute("""
                     SELECT id, sender, content, timestamp, is_deleted, recipient, expires_at
                     FROM messages
                     WHERE is_deleted = 0 AND recipient IS NULL
+                    AND (expires_at IS NULL OR expires_at > ?)
                     ORDER BY timestamp DESC LIMIT ?
-                """, (limit,))
+                """, (now, limit))
 
             rows = cursor.fetchall()
             decrypted_rows = []
