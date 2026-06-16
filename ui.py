@@ -440,8 +440,14 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display.see("end")
 
     def on_search_key(self, event):
+        query = self.search_entry.get().strip().lower()
+        if query == getattr(self, "_last_search_query", ""):
+            return
         if self._search_timer:
-            self.after_cancel(self._search_timer)
+            try:
+                self.after_cancel(self._search_timer)
+            except Exception:
+                pass
         self._search_timer = self.after(300, self.load_chat_history)
 
     def clear_search(self):
