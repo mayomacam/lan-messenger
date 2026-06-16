@@ -8,7 +8,7 @@ import os
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ssl_utils import wrap_socket, get_cert_fingerprint, get_peer_fingerprint
+from ssl_utils import wrap_socket, get_cert_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
@@ -129,28 +129,32 @@ class NetworkManager:
         self.running = True
         threading.Thread(target=self.start_server, daemon=True).start()
 
-    def _check_tofu(self, ip, fingerprint) -> bool:
+    def _verify_peer_trust(self, sslsock, addr, username=None):
+        """Perform TOFU fingerprint verification."""
+        fingerprint = get_cert_fingerprint(sslsock)
+        if not fingerprint:
+            return True # No cert (could happen if not using TLS, though we should be)
+
+        peer_info = self.db.get_trusted_peer(addr[0])
         logger = audit.get_logger()
-        existing = self.db.get_trusted_peer(ip)
-        if existing:
-            # existing format: (ip, username, fingerprint, trust_level, last_seen)
-            old_fingerprint = existing[2]
-            if old_fingerprint != fingerprint:
-                msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {ip}! Possible Man-in-the-Middle attack."
-                print(f"[DEBUG] {msg}")
-                if logger: logger.log("SECURITY_ALERT", msg)
-                if self.callback: self.callback('SECURITY_ALERT', msg)
-                if self.callback: self.callback('TRUST_WARNING', ip, fingerprint, old_fingerprint)
-                return False
-            else:
-                # Update last seen
-                self.db.add_trusted_peer(ip, existing[1], fingerprint, existing[3])
+
+        if not peer_info:
+            # First time seeing this peer
+            self.db.add_trusted_peer(addr[0], username or "Unknown", fingerprint, 'untrusted')
+            if logger: logger.log("SECURITY_INFO", f"New peer {addr[0]} fingerprint recorded (TOFU).")
+            return True
         else:
-            # Trust on first use
-            self.db.add_trusted_peer(ip, "Unknown", fingerprint, 'trusted')
-            msg = f"New peer {ip} trusted with fingerprint {fingerprint[:16]}..."
-            if logger: logger.log("TOFU_TRUST", msg)
-        return True
+            # Check if fingerprint matches
+            stored_fingerprint = peer_info[2]
+            if fingerprint != stored_fingerprint:
+                msg = f"SECURITY ALERT: Fingerprint mismatch for {addr[0]}! Potential MITM."
+                print(f"[WARNING] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                # We could block here, but for TOFU we usually warn and let the user decide.
+                # For SOC2 we should at least log and maybe update trust level.
+                self.db.update_peer_trust(addr[0], 'mismatch')
+                return False
+            return True
 
     def start_server(self):
         print(f"[DEBUG] Network Server starting...")
@@ -172,10 +176,10 @@ class NetworkManager:
                 fingerprint = get_peer_fingerprint(client)
                 if fingerprint:
                     if not self._check_tofu(addr[0], fingerprint):
-                        # We don't close here to allow UI callback to warn
-                        pass
+                        client.close()
+                        continue
 
-                self.executor.submit(self.handle_client, client, addr)
+                threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except OSError as e:
                 if self.running:
                      print(f"[DEBUG] Server accept error: {e}")
@@ -189,7 +193,7 @@ class NetworkManager:
         chunks = []
         received = 0
         while received < n:
-            chunk = sock.recv(min(n - received, 8192))
+            chunk = sock.recv(n - received)
             if not chunk:
                 return None
             chunks.append(chunk)
@@ -231,6 +235,27 @@ class NetworkManager:
             serialized = base64.b64encode(nonce + ciphertext)
 
         sock.sendall(struct.pack('>I', len(serialized)) + serialized)
+
+    def _check_tofu(self, ip, fingerprint) -> bool:
+        logger = audit.get_logger()
+        existing = self.db.get_trusted_peer(ip)
+        if existing:
+            old_fingerprint, _ = existing
+            if old_fingerprint != fingerprint:
+                msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {ip}! Possible Man-in-the-Middle attack."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                if self.callback: self.callback('SECURITY_ALERT', msg)
+                return False
+            else:
+                # Update last seen
+                self.db.add_trusted_peer(ip, fingerprint)
+        else:
+            # Trust on first use
+            self.db.add_trusted_peer(ip, fingerprint)
+            msg = f"New peer {ip} trusted with fingerprint {fingerprint[:16]}..."
+            if logger: logger.log("TOFU_TRUST", msg)
+        return True
 
     def handle_client(self, client, addr):
         """Process incoming client packets with optional IP whitelist and token verification."""
@@ -283,7 +308,7 @@ class NetworkManager:
                 if not all(isinstance(x, str) for x in [sender, content, msg_id]):
                     return
                 timestamp = time.time()
-                expires_at = timestamp + ttl if isinstance(ttl, (int, float)) and ttl > 0 else None
+                expires_at = timestamp + ttl if isinstance(ttl, (int, float)) else None
                 self.db.add_received_message(msg_id, sender, content, timestamp, expires_at=expires_at)
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
@@ -295,7 +320,7 @@ class NetworkManager:
                 if not all(isinstance(x, str) for x in [sender, content, msg_id]):
                     return
                 timestamp = time.time()
-                expires_at = timestamp + ttl if isinstance(ttl, (int, float)) and ttl > 0 else None
+                expires_at = timestamp + ttl if isinstance(ttl, (int, float)) else None
                 # Store with recipient = sender's IP so we can filter by peer_ip later
                 self.db.add_received_message(msg_id, sender, content, timestamp, recipient=addr[0], expires_at=expires_at)
                 if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])

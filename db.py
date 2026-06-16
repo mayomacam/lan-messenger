@@ -98,6 +98,15 @@ class Database:
             cursor.execute("DROP INDEX IF EXISTS idx_messages_deleted_timestamp")
             cursor.execute("DROP INDEX IF EXISTS idx_messages_recipient")
 
+            # Trusted Peers table (TOFU)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trusted_peers (
+                    ip TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL,
+                    last_seen REAL NOT NULL
+                )
+            """)
+
             # Files table: id, filename, path, size, owner_ip, is_folder
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
@@ -117,14 +126,14 @@ class Database:
             if 'checksum' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN checksum TEXT")
 
-            # Trusted Peers table (TOFU): ip, username, fingerprint, trust_level, last_seen
+            # Trusted Peers table: ip, username, fingerprint, trust_level, last_seen
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trusted_peers (
                     ip TEXT PRIMARY KEY,
                     username TEXT,
-                    fingerprint TEXT NOT NULL,
+                    fingerprint TEXT,
                     trust_level TEXT DEFAULT 'untrusted',
-                    last_seen REAL NOT NULL
+                    last_seen REAL
                 )
             """)
 
@@ -139,9 +148,10 @@ class Database:
             """)
             self.conn.commit()
 
-    def add_message(self, sender: str, content: str, recipient: str = None, expires_at: float = None) -> str:
+    def add_message(self, sender: str, content: str, recipient: str = None, ttl: int = None) -> str:
         msg_id = str(uuid.uuid4())
         timestamp = time.time()
+        expires_at = timestamp + ttl if ttl else None
         encrypted_content = self.cipher.encrypt(content)
         with self.lock:
             # Use connection as context manager for automatic commit/rollback
@@ -235,11 +245,6 @@ class Database:
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
             cursor = self.conn.execute("SELECT * FROM trusted_peers WHERE ip = ?", (ip,))
-            return cursor.fetchone()
-
-    def get_peer_trust_info(self, ip: str) -> Tuple[str, float]:
-        with self.lock:
-            cursor = self.conn.execute("SELECT fingerprint, last_seen FROM trusted_peers WHERE ip = ?", (ip,))
             return cursor.fetchone()
 
     def update_peer_trust(self, ip: str, trust_level: str):

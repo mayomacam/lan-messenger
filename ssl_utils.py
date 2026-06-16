@@ -32,15 +32,14 @@ def get_ssl_context(server_side: bool) -> ssl.SSLContext:
         _SSL_CONTEXT_CACHE[purpose] = ctx
     return _SSL_CONTEXT_CACHE[purpose]
 
+import hashlib
+
 def get_cert_fingerprint(sslsock: ssl.SSLSocket) -> str:
     """Extracts the SHA-256 fingerprint of the peer certificate."""
-    try:
-        cert_bin = sslsock.getpeercert(binary_form=True)
-        if not cert_bin:
-            return None
-        return hashlib.sha256(cert_bin).hexdigest()
-    except Exception:
+    cert_bin = sslsock.getpeercert(binary_form=True)
+    if not cert_bin:
         return None
+    return hashlib.sha256(cert_bin).hexdigest()
 
 def wrap_socket(sock: socket.socket, server_side: bool = False) -> ssl.SSLSocket:
     """Wraps a raw socket with a cached TLS context."""
@@ -50,4 +49,10 @@ def wrap_socket(sock: socket.socket, server_side: bool = False) -> ssl.SSLSocket
 
 def get_peer_fingerprint(sslsock: ssl.SSLSocket) -> str:
     """Extracts the SHA-256 fingerprint of the peer's certificate."""
-    return get_cert_fingerprint(sslsock)
+    try:
+        cert_bin = sslsock.getpeercert(binary_form=True)
+        if not cert_bin:
+            return None
+        return hashlib.sha256(cert_bin).hexdigest()
+    except Exception:
+        return None
