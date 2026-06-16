@@ -404,9 +404,15 @@ class LANMessengerApp(ctk.CTk):
 
     def load_chat_history(self, debounce=True):
         """Debounced global chat refresh to handle high-frequency events efficiently."""
+        if not self.winfo_exists():
+            return
+
         if debounce:
             if self._chat_history_after_id:
-                self.after_cancel(self._chat_history_after_id)
+                try:
+                    self.after_cancel(self._chat_history_after_id)
+                except Exception:
+                    pass
             self._chat_history_after_id = self.after(100, lambda: self.load_chat_history(debounce=False))
             return
 
