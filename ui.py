@@ -66,6 +66,7 @@ class LANMessengerApp(ctk.CTk):
         self.private_chat_tabs = {} # tab_name -> ip
         self.private_entries = {} # ip -> CTkEntry
         self._last_peers_snapshot = ""
+        self._search_after_id = None
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
@@ -192,6 +193,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
+        self.search_entry.bind("<KeyRelease>", self.on_search_key)
 
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
@@ -275,10 +277,14 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
-        for log in logs:
-            # log: (id, event_type, details, timestamp)
-            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            self.audit_display.insert("end", f"[{ts}] {log[1]}: {log[2]}\n")
+        if not logs:
+            self.audit_display.insert("end", "No logs found.", "center")
+            self.audit_display.tag_config("center", justify='center')
+        else:
+            for log in logs:
+                # log: (id, event_type, details, timestamp)
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+                self.audit_display.insert("end", f"[{ts}] {log[1]}: {log[2]}\n")
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("end")
@@ -395,6 +401,22 @@ class LANMessengerApp(ctk.CTk):
                 self.current_private_peer = peer_ip
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
+        elif tab == "Audit Logs":
+            self.load_audit_logs()
+
+    def on_search_key(self, event):
+        # Throttle live search
+        if self._search_after_id:
+            self.after_cancel(self._search_after_id)
+        self._search_after_id = self.after(300, self.load_chat_history)
+
+    def clear_search(self):
+        if self._search_after_id:
+            self.after_cancel(self._search_after_id)
+            self._search_after_id = None
+        self.search_entry.delete(0, "end")
+        self.load_chat_history()
+        self.search_entry.focus_set()
 
     def load_chat_history(self):
         query = self.search_entry.get().strip().lower()
@@ -416,6 +438,10 @@ class LANMessengerApp(ctk.CTk):
 
         if lines:
             self.chat_display.insert("end", "\n".join(lines) + "\n")
+        else:
+            msg = f"No messages found matching '{query}'." if query else "No messages found."
+            self.chat_display.insert("end", msg, "center")
+            self.chat_display.tag_config("center", justify='center')
 
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
@@ -504,11 +530,15 @@ class LANMessengerApp(ctk.CTk):
         display = self.private_chats[peer_ip]
         display.configure(state="normal")
         display.delete("1.0", "end")
-        for msg in messages:
-            sender = msg[1]
-            content = msg[2]
-            ts = time.strftime('%H:%M', time.localtime(msg[3]))
-            display.insert("end", f"[{ts}] {sender}: {content}\n")
+        if not messages:
+            display.insert("end", "No messages found.", "center")
+            display.tag_config("center", justify='center')
+        else:
+            for msg in messages:
+                sender = msg[1]
+                content = msg[2]
+                ts = time.strftime('%H:%M', time.localtime(msg[3]))
+                display.insert("end", f"[{ts}] {sender}: {content}\n")
         display.configure(state="disabled")
         display.see("end")
 
