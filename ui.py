@@ -486,6 +486,22 @@ class LANMessengerApp(ctk.CTk):
                 self.current_private_peer = peer_ip
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
+        elif tab == "Audit Logs":
+            self.load_audit_logs()
+
+    def on_search_key(self, event):
+        # Throttle live search
+        if self._search_after_id:
+            self.after_cancel(self._search_after_id)
+        self._search_after_id = self.after(300, self.load_chat_history)
+
+    def clear_search(self):
+        if self._search_after_id:
+            self.after_cancel(self._search_after_id)
+            self._search_after_id = None
+        self.search_entry.delete(0, "end")
+        self.load_chat_history()
+        self.search_entry.focus_set()
 
     def clear_search(self):
         self.search_entry.delete(0, "end")
@@ -530,7 +546,7 @@ class LANMessengerApp(ctk.CTk):
             self.chat_display.tag_config("center", justify='center')
         elif not messages:
             self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
-            self.chat_display.tag_config("center", justify='center')
+            self.chat_display._textbox.tag_config("center", justify='center')
 
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
