@@ -8,6 +8,7 @@ import time
 import shutil
 import json
 import audit
+from concurrent.futures import ThreadPoolExecutor
 from db import Database
 from network import NetworkManager, DiscoveryManager
 from file_transfer import FileTransferManager
@@ -21,6 +22,9 @@ class LANMessengerApp(ctk.CTk):
         super().__init__()
         self.title("LAN Messenger")
         self.geometry("1100x700")
+
+        self._search_after_id = None
+        self._private_chat_after_ids = {}
 
         # Load Settings
         self.settings = load_settings()
@@ -36,6 +40,9 @@ class LANMessengerApp(ctk.CTk):
         audit.init_logger(self.db)
         self.logger = audit.get_logger()
         self.logger.log("APP_START", f"Application started for user {self.username}")
+
+        # Thread pool for non-blocking network calls
+        self.executor = ThreadPoolExecutor(max_workers=5)
 
         # Init Networking with Configured Ports
         # Initialize managers with security configuration from settings
@@ -62,10 +69,13 @@ class LANMessengerApp(ctk.CTk):
         )
 
         self.peers = {} # ip -> username
+        self.peer_trust = {} # ip -> trust_level
         self.private_chats = {} # ip -> CTkTextbox
         self.private_chat_tabs = {} # tab_name -> ip
         self.private_entries = {} # ip -> CTkEntry
         self._last_peers_snapshot = ""
+        self._search_timer = None
+        self._last_search_query = ""
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
@@ -79,7 +89,7 @@ class LANMessengerApp(ctk.CTk):
 
         # Periodic Updates
         self.after(2000, self.refresh_peers)
-        self.after(60000, self.background_reaper) # Every 60s
+        self.after(10000, self.reap_messages)
         self.load_chat_history()
         self.after(100, lambda: self.msg_entry.focus_set())
 
@@ -98,25 +108,11 @@ class LANMessengerApp(ctk.CTk):
 
     def on_network_event(self, event_type, *args):
         # Dispatch to main thread
-        self.after(0, lambda: self._handle_event(event_type, *args))
-
-    def background_reaper(self):
-        """Periodically remove expired messages and refresh UI."""
-        self.db.reap_expired_messages()
-        self.load_chat_history()
-        for ip in list(self.private_chats.keys()):
-            self.load_private_chat(ip)
-        self.after(60000, self.background_reaper)
+        if self.winfo_exists():
+            self.after(0, lambda: self._handle_event(event_type, *args))
 
     def _handle_event(self, event_type, *args):
-        if event_type == 'TRUST_WARNING':
-             peer_ip, new_fp, old_fp = args[0], args[1], args[2]
-             messagebox.showwarning("Security Warning",
-                 f"Certificate mismatch for {peer_ip}!\n\n"
-                 f"Stored: {old_fp[:16]}...\n"
-                 f"Received: {new_fp[:16]}...\n\n"
-                 "This could be a Man-in-the-Middle attack or the peer has re-generated their certificate.")
-        elif event_type == 'NEW_PEER':
+        if event_type == 'NEW_PEER':
             ip, name = args[0], args[1]
 
             # Check if this is a NEW peer (not just a name update)
@@ -127,7 +123,7 @@ class LANMessengerApp(ctk.CTk):
 
             # Only send HELLO back if this was a new peer
             if is_new_peer:
-                threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
+                self.executor.submit(self.network.send_hello, ip, self.username)
         elif event_type == 'MSG':
              self.load_chat_history()
         elif event_type == 'MSG_PRIV':
@@ -140,6 +136,12 @@ class LANMessengerApp(ctk.CTk):
                  self.open_private_chat(peer_ip, sender_name)
         elif event_type in ['EDIT', 'DELETE']:
              self.load_chat_history()
+        elif event_type == 'TRUST_WARNING':
+             ip, new_fp, old_fp = args[0], args[1], args[2]
+             self.show_trust_warning(ip)
+        elif event_type == 'SECURITY_ALERT':
+             msg = args[0]
+             messagebox.showwarning("Security Alert", msg)
 
     def create_sidebar(self):
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
@@ -188,6 +190,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self.chat_display.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -214,6 +217,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
+        self.search_entry.bind("<KeyRelease>", self.on_search_key)
 
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
@@ -297,10 +301,14 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
+        lines = []
         for log in logs:
             # log: (id, event_type, details, timestamp)
             ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            self.audit_display.insert("end", f"[{ts}] {log[1]}: {log[2]}\n")
+            lines.append(f"[{ts}] {log[1]}: {log[2]}")
+
+        if lines:
+            self.audit_display.insert("end", "\n".join(lines) + "\n")
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("end")
@@ -318,15 +326,39 @@ class LANMessengerApp(ctk.CTk):
 
             # Notify all connected peers of name change
             for ip in self.peers:
-                threading.Thread(target=self.network.send_hello, args=(ip, self.username)).start()
+                self.executor.submit(self.network.send_hello, ip, self.username)
 
             # Non-blocking success feedback
             self.change_name_btn.configure(text="Saved", fg_color="#2ecc71")
             self.after(2000, lambda: self.change_name_btn.configure(text="Set", fg_color=("#3B8ED0", "#1F6AA5")))
 
+    def reap_messages(self):
+        """Periodically remove expired messages from the database and refresh UI."""
+        deleted_count = self.db.delete_expired_messages()
+        if deleted_count > 0:
+             self.logger.log("DATA_RETENTION", f"Automatically reaped {deleted_count} expired messages.")
+             self.load_chat_history()
+             if self.current_private_peer:
+                 self.load_private_chat(self.current_private_peer)
+
+        self.after(10000, self.reap_messages) # Run every 10s
+
+    def show_trust_warning(self, ip):
+        if messagebox.askyesno("Security Warning", f"Fingerprint mismatch detected for {ip}!\nThis could be a Man-in-the-Middle attack or the user reinstalled the app.\n\nDo you want to trust this new identity?"):
+            self.db.update_peer_trust(ip, 'trusted')
+            self.peer_trust[ip] = 'trusted'
+            self.refresh_peers()
+
     def refresh_peers(self):
+        # Update peer trust levels from DB
+        for ip in list(self.peers.keys()):
+            peer_info = self.db.get_trusted_peer(ip)
+            if peer_info:
+                # peer_info format: (ip, username, fingerprint, trust_level, last_seen)
+                self.peer_trust[ip] = peer_info[3]
+
         # Prevent unnecessary UI rebuilds using snapshot comparison
-        current_snapshot = json.dumps(self.peers, sort_keys=True)
+        current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust}, sort_keys=True)
         if current_snapshot == self._last_peers_snapshot:
             self.after(2000, self.refresh_peers)
             return
@@ -353,6 +385,18 @@ class LANMessengerApp(ctk.CTk):
             btn_chat = ctk.CTkButton(row, text="Chat", width=60, height=20,
                               command=lambda i=ip, n=name: self.open_private_chat(i, n))
             btn_chat.pack(side="right", padx=2)
+
+            # Trust indicator
+            trust = self.peer_trust.get(ip, 'untrusted')
+            color = "gray"
+            if trust == 'trusted': color = "green"
+            elif trust == 'mismatch' or trust == 'untrusted': # simplified
+                color = "red" if trust == 'mismatch' else "gray"
+
+            trust_lbl = ctk.CTkLabel(row, text="●", text_color=color, width=10)
+            trust_lbl.pack(side="right", padx=5)
+            if trust == 'mismatch':
+                trust_lbl.bind("<Button-1>", lambda e, i=ip: self.show_trust_warning(i))
         self.after(2000, self.refresh_peers)
 
     def add_manual_peer(self):
@@ -411,6 +455,8 @@ class LANMessengerApp(ctk.CTk):
         tab = self.tabview.get()
         if tab == "Global Chat":
             self.msg_entry.focus_set()
+        elif tab == "Audit Logs":
+            self.load_audit_logs()
         elif tab.startswith("Chat: "):
             peer_ip = self.private_chat_tabs.get(tab)
             if peer_ip:
@@ -422,7 +468,13 @@ class LANMessengerApp(ctk.CTk):
         self.search_entry.delete(0, "end")
         self.load_chat_history()
 
+    def on_search_key(self, event):
+        if self._search_after_id:
+            self.after_cancel(self._search_after_id)
+        self._search_after_id = self.after(300, self.load_chat_history)
+
     def load_chat_history(self):
+        self._search_after_id = None
         query = self.search_entry.get().strip().lower()
         messages = self.db.get_messages(200)
         self.chat_display.configure(state="normal")
@@ -439,6 +491,12 @@ class LANMessengerApp(ctk.CTk):
 
             ts = time.strftime('%H:%M', time.localtime(msg[3]))
             lines.append(f"[{ts}] {sender}: {content}")
+
+        if query:
+            if lines:
+                self.chat_display.insert("end", f"--- Found {len(lines)} results for '{query}' ---\n\n", "search_info")
+            else:
+                self.chat_display.insert("end", f"--- No results found for '{query}' ---\n", "search_info")
 
         if lines:
             self.chat_display.insert("end", "\n".join(lines) + "\n")
@@ -465,16 +523,15 @@ class LANMessengerApp(ctk.CTk):
             peer_ip = self.current_private_peer
             if peer_ip:
                 msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, expires_at=expires_at)
-                threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True, ttl)).start()
+                self.executor.submit(self.network.send_message, peer_ip, self.username, msg, msg_id, True, ttl)
                 self.msg_entry.delete(0, "end")
                 self.load_private_chat(peer_ip)
                 return
 
         # Otherwise send global message
         msg_id = self.db.add_message(self.username, msg, expires_at=expires_at)
-
         for ip in self.peers:
-            threading.Thread(target=self.network.send_message, args=(ip, self.username, msg, msg_id, False, ttl)).start()
+            self.executor.submit(self.network.send_message, ip, self.username, msg, msg_id, False, ttl)
 
         self.msg_entry.delete(0, "end")
         self.load_chat_history()
@@ -502,10 +559,6 @@ class LANMessengerApp(ctk.CTk):
             display = ctk.CTkTextbox(tab_frame, state="disabled")
             display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-            # We don't need a separate input per tab if we reuse the global msg_entry,
-            # but it's currently in Global Chat tab. Let's move msg_entry to a more global place?
-            # Or just add an input to each private tab.
-
             input_frame = ctk.CTkFrame(tab_frame, height=50)
             input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
             input_frame.grid_columnconfigure(0, weight=1)
@@ -513,17 +566,32 @@ class LANMessengerApp(ctk.CTk):
             entry = ctk.CTkEntry(input_frame, placeholder_text=f"Message {name}...")
             entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
-            def send_priv(e=None, i=ip, ent=entry):
+            # Shared TTL for private chat
+            priv_ttl_var = ctk.StringVar(value=self.ttl_var.get())
+            priv_ttl_menu = ctk.CTkOptionMenu(input_frame, values=["No Expiry", "1 min", "1 hour", "1 day"],
+                                             variable=priv_ttl_var, width=100)
+            priv_ttl_menu.grid(row=0, column=1, padx=5, pady=10)
+
+            def send_priv(e=None, i=ip, ent=entry, tvar=priv_ttl_var):
                 m = ent.get()
                 if not m: return
-                mid = self.db.add_message(self.username, m, recipient=i)
-                threading.Thread(target=self.network.send_message, args=(i, self.username, m, mid, True)).start()
+
+                # Manual TTL mapping for private chat helper
+                tval = tvar.get()
+                ttl_sec = None
+                if tval == "1 min": ttl_sec = 60
+                elif tval == "1 hour": ttl_sec = 3600
+                elif tval == "1 day": ttl_sec = 86400
+
+                exp_at = time.time() + ttl_sec if ttl_sec else None
+                mid = self.db.add_message(self.username, m, recipient=i, expires_at=exp_at)
+                self.executor.submit(self.network.send_message, i, self.username, m, mid, True, ttl_sec)
                 ent.delete(0, "end")
                 self.load_private_chat(i)
 
             entry.bind("<Return>", send_priv)
-            btn = ctk.CTkButton(input_frame, text="Send", width=100, command=send_priv)
-            btn.grid(row=0, column=1, padx=10, pady=10)
+            btn = ctk.CTkButton(input_frame, text="Send", width=80, command=send_priv)
+            btn.grid(row=0, column=2, padx=10, pady=10)
 
             self.private_chats[ip] = display
             self.private_entries[ip] = entry
@@ -533,8 +601,17 @@ class LANMessengerApp(ctk.CTk):
         self.tabview.set(tab_name)
         self.load_private_chat(ip)
 
-    def load_private_chat(self, peer_ip):
+    def load_private_chat(self, peer_ip, debounce=True):
+        if not self.winfo_exists(): return
         if peer_ip not in self.private_chats: return
+
+        if debounce:
+             if peer_ip in self._private_chat_after_ids:
+                 self.after_cancel(self._private_chat_after_ids[peer_ip])
+             self._private_chat_after_ids[peer_ip] = self.after(100, lambda: self.load_private_chat(peer_ip, False))
+             return
+
+        self._private_chat_after_ids.pop(peer_ip, None)
         messages = self.db.get_messages(100, peer_ip=peer_ip)
         display = self.private_chats[peer_ip]
         display.configure(state="normal")
@@ -572,7 +649,7 @@ class LANMessengerApp(ctk.CTk):
         if new_content:
             self.db.edit_message(msg_id, new_content)
             for ip in self.peers:
-                threading.Thread(target=self.network.send_edit, args=(ip, msg_id, new_content)).start()
+                self.executor.submit(self.network.send_edit, ip, msg_id, new_content)
             self.load_chat_history()
 
     def delete_last_message(self):
@@ -584,7 +661,7 @@ class LANMessengerApp(ctk.CTk):
         if messagebox.askyesno("Delete", "Delete this message?"):
             self.db.delete_message(msg_id)
             for ip in self.peers:
-                threading.Thread(target=self.network.send_delete, args=(ip, msg_id)).start()
+                self.executor.submit(self.network.send_delete, ip, msg_id)
             self.load_chat_history()
 
     def share_file(self):
@@ -733,7 +810,8 @@ class LANMessengerApp(ctk.CTk):
 
             self.overall_progress.set(overall_ratio)
 
-        self.after(0, update)
+        if self.winfo_exists():
+            self.after(0, update)
 
     def start_download(self, ip, path, is_folder):
         if is_folder:
@@ -780,6 +858,7 @@ class LANMessengerApp(ctk.CTk):
         self.network.close()
         self.file_manager.close()
         self.db.close()
+        self.executor.shutdown(wait=False)
         self.destroy()
 
 if __name__ == "__main__":

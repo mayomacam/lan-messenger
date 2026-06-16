@@ -6,8 +6,9 @@ import struct
 import hashlib
 import os
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ssl_utils import wrap_socket, get_peer_fingerprint
+from ssl_utils import wrap_socket, get_cert_fingerprint, get_peer_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
@@ -122,10 +123,34 @@ class NetworkManager:
             key = hashlib.sha256(self.auth_token.encode()).digest()
             self.transit_cipher = AESGCM(key)
 
+        self.executor = ThreadPoolExecutor(max_workers=20)
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.running = True
         threading.Thread(target=self.start_server, daemon=True).start()
+
+    def _check_tofu(self, ip, fingerprint) -> bool:
+        logger = audit.get_logger()
+        existing = self.db.get_trusted_peer(ip)
+        if existing:
+            # existing format: (ip, username, fingerprint, trust_level, last_seen)
+            old_fingerprint = existing[2]
+            if old_fingerprint != fingerprint:
+                msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {ip}! Possible Man-in-the-Middle attack."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                if self.callback: self.callback('SECURITY_ALERT', msg)
+                if self.callback: self.callback('TRUST_WARNING', ip, fingerprint, old_fingerprint)
+                return False
+            else:
+                # Update last seen
+                self.db.add_trusted_peer(ip, existing[1], fingerprint, existing[3])
+        else:
+            # Trust on first use
+            self.db.add_trusted_peer(ip, "Unknown", fingerprint, 'trusted')
+            msg = f"New peer {ip} trusted with fingerprint {fingerprint[:16]}..."
+            if logger: logger.log("TOFU_TRUST", msg)
+        return True
 
     def start_server(self):
         print(f"[DEBUG] Network Server starting...")
@@ -142,7 +167,15 @@ class NetworkManager:
                 client, addr = self.server_sock.accept()
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
-                threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
+
+                # TOFU: check peer fingerprint
+                fingerprint = get_peer_fingerprint(client)
+                if fingerprint:
+                    if not self._check_tofu(addr[0], fingerprint):
+                        # We don't close here to allow UI callback to warn
+                        pass
+
+                self.executor.submit(self.handle_client, client, addr)
             except OSError as e:
                 if self.running:
                      print(f"[DEBUG] Server accept error: {e}")
@@ -153,13 +186,15 @@ class NetworkManager:
 
     def _recv_all(self, sock, n):
         """Helper to receive exactly n bytes."""
-        data = b''
-        while len(data) < n:
-            packet = sock.recv(n - len(data))
-            if not packet:
+        chunks = []
+        received = 0
+        while received < n:
+            chunk = sock.recv(min(n - received, 8192))
+            if not chunk:
                 return None
-            data += packet
-        return data
+            chunks.append(chunk)
+            received += len(chunk)
+        return b"".join(chunks)
 
     def _recv_json(self, sock):
         """Receives a length-prefixed JSON packet (optionally encrypted)."""
@@ -202,25 +237,6 @@ class NetworkManager:
         logger = audit.get_logger()
         try:
             client.settimeout(10)
-
-            # TOFU (Trust On First Use) Certificate Check
-            fingerprint = get_peer_fingerprint(client)
-            if fingerprint:
-                trust_info = self.db.get_peer_trust_info(addr[0])
-                if trust_info:
-                    stored_fp, last_seen = trust_info
-                    if stored_fp != fingerprint:
-                        msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {addr[0]}! Potential Man-in-the-Middle attack."
-                        print(f"[DEBUG] {msg}")
-                        if logger: logger.log("SECURITY_ALERT", msg)
-                        if self.callback: self.callback('TRUST_WARNING', addr[0], fingerprint, stored_fp)
-                        self._send_json(client, {'status': 'ERR', 'msg': 'Security alert: Certificate mismatch'})
-                        return
-                else:
-                    # First time seeing this peer, trust them
-                    self.db.add_trusted_peer(addr[0], fingerprint)
-                    if logger: logger.log("SECURITY_EVENT", f"New peer certificate trusted for {addr[0]}: {fingerprint}")
-
             # IP whitelist enforcement
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 msg = f"Connection from {addr[0]} rejected: IP not allowed."
@@ -314,6 +330,12 @@ class NetworkManager:
                 raw.settimeout(5)
                 raw.connect((target_ip, self.port))
                 s = wrap_socket(raw)
+
+                # TOFU check on outbound too
+                fingerprint = get_peer_fingerprint(s)
+                if fingerprint:
+                    self._check_tofu(target_ip, fingerprint)
+
                 self._send_json(s, packet)
                 return True
         except Exception as e:
@@ -354,3 +376,4 @@ class NetworkManager:
             self.server_sock.close()
         except:
             pass
+        self.executor.shutdown(wait=False)

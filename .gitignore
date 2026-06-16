@@ -6,7 +6,3 @@ __pycache__/
 *.db-wal
 downloads/
 .master.key
-dist/
-build/
-__pycache__/
-*.spec

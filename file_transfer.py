@@ -5,7 +5,7 @@ import json
 import time
 import hashlib
 from pathlib import Path
-from ssl_utils import wrap_socket
+from ssl_utils import wrap_socket, get_peer_fingerprint
 import audit
 
 class FileTransferManager:
@@ -58,11 +58,31 @@ class FileTransferManager:
                 client, addr = self.server_socket.accept()
                 # Wrap the raw socket with TLS before handing to handler
                 client = wrap_socket(client, server_side=True)
+
+                # TOFU: check peer fingerprint
+                fingerprint = get_peer_fingerprint(client)
+                if fingerprint:
+                    self._check_tofu(addr[0], fingerprint)
+
                 threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
             except Exception as e:
                 if self.running:
                     print(f"[DEBUG] File server accept error: {e}")
                 break
+
+    def _check_tofu(self, ip, fingerprint):
+        logger = audit.get_logger()
+        existing = self.db.get_trusted_peer(ip)
+        if existing:
+            old_fingerprint, _ = existing
+            if old_fingerprint != fingerprint:
+                msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {ip} during file transfer!"
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+            else:
+                self.db.add_trusted_peer(ip, fingerprint)
+        else:
+            self.db.add_trusted_peer(ip, fingerprint)
 
     def handle_client(self, client, addr):
         """Handle a client connection.
@@ -215,6 +235,12 @@ class FileTransferManager:
                 raw.settimeout(10)
                 raw.connect((target_ip, self.port))
                 s = wrap_socket(raw)
+
+                # TOFU: check peer fingerprint
+                fingerprint = get_peer_fingerprint(s)
+                if fingerprint:
+                    self._check_tofu(target_ip, fingerprint)
+
                 payload = {'cmd': 'PULL_FILE', 'path': remote_path}
                 if self.auth_token is not None:
                     payload['token'] = self.auth_token
@@ -262,6 +288,12 @@ class FileTransferManager:
                 raw.settimeout(10)
                 raw.connect((target_ip, self.port))
                 s = wrap_socket(raw)
+
+                # TOFU: check peer fingerprint
+                fingerprint = get_peer_fingerprint(s)
+                if fingerprint:
+                    self._check_tofu(target_ip, fingerprint)
+
                 payload = {'cmd': 'LIST_FOLDER', 'path': remote_path}
                 if self.auth_token is not None:
                     payload['token'] = self.auth_token
@@ -390,6 +422,12 @@ class FileTransferManager:
                 raw.settimeout(5)
                 raw.connect((target_ip, self.port))
                 s = wrap_socket(raw)
+
+                # TOFU: check peer fingerprint
+                fingerprint = get_peer_fingerprint(s)
+                if fingerprint:
+                    self._check_tofu(target_ip, fingerprint)
+
                 payload = {'cmd': 'LIST_SHARED'}
                 if self.auth_token is not None:
                     payload['token'] = self.auth_token
