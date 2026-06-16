@@ -403,8 +403,12 @@ class LANMessengerApp(ctk.CTk):
 
     def load_chat_history(self):
         if self._search_timer:
-            self.after_cancel(self._search_timer)
+            try:
+                self.after_cancel(self._search_timer)
+            except Exception:
+                pass
             self._search_timer = None
+        self._last_search_query = self.search_entry.get().strip().lower()
 
         query = self.search_entry.get().strip().lower()
         messages = self.db.get_messages(200)
