@@ -634,8 +634,22 @@ class LANMessengerApp(ctk.CTk):
         self.tabview.set(tab_name)
         self.load_private_chat(ip)
 
-    def load_private_chat(self, peer_ip):
+    def load_private_chat(self, peer_ip, debounce=True):
+        """Debounced private chat refresh with batched insertions."""
+        if not self.winfo_exists():
+            return
         if peer_ip not in self.private_chats: return
+
+        if debounce:
+            if peer_ip in self._private_chat_after_ids:
+                try:
+                    self.after_cancel(self._private_chat_after_ids[peer_ip])
+                except Exception:
+                    pass
+            self._private_chat_after_ids[peer_ip] = self.after(100, lambda: self.load_private_chat(peer_ip, debounce=False))
+            return
+
+        self._private_chat_after_ids.pop(peer_ip, None)
         messages = self.db.get_messages(100, peer_ip=peer_ip)
         display = self.private_chats[peer_ip]
         display.configure(state="normal")
