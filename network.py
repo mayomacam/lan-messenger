@@ -203,7 +203,7 @@ class NetworkManager:
 
         sock.sendall(struct.pack('>I', len(serialized)) + serialized)
 
-    def _check_tofu(self, ip, fingerprint):
+    def _check_tofu(self, ip, fingerprint) -> bool:
         logger = audit.get_logger()
         existing = self.db.get_trusted_peer(ip)
         if existing:
@@ -213,6 +213,7 @@ class NetworkManager:
                 print(f"[DEBUG] {msg}")
                 if logger: logger.log("SECURITY_ALERT", msg)
                 if self.callback: self.callback('SECURITY_ALERT', msg)
+                return False
             else:
                 # Update last seen
                 self.db.add_trusted_peer(ip, fingerprint)
@@ -221,6 +222,7 @@ class NetworkManager:
             self.db.add_trusted_peer(ip, fingerprint)
             msg = f"New peer {ip} trusted with fingerprint {fingerprint[:16]}..."
             if logger: logger.log("TOFU_TRUST", msg)
+        return True
 
     def handle_client(self, client, addr):
         """Process incoming client packets with optional IP whitelist and token verification."""
