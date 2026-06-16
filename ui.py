@@ -67,6 +67,7 @@ class LANMessengerApp(ctk.CTk):
         self.private_entries = {} # ip -> CTkEntry
         self._last_peers_snapshot = ""
         self._search_timer = None
+        self._last_search_query = ""
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
 
