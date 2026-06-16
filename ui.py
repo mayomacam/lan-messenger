@@ -543,9 +543,8 @@ class LANMessengerApp(ctk.CTk):
 
         # Otherwise send global message
         msg_id = self.db.add_message(self.username, msg, expires_at=expires_at)
-
         for ip in self.peers:
-            threading.Thread(target=self.network.send_message, args=(ip, self.username, msg, msg_id, False, ttl)).start()
+            self.executor.submit(self.network.send_message, ip, self.username, msg, msg_id, False, ttl)
 
         self.msg_entry.delete(0, "end")
         self.load_chat_history()
