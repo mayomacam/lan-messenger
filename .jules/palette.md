@@ -18,6 +18,6 @@
 **Learning:** In multi-tabbed chat interfaces, focus should be maintained on the relevant input field when switching between conversations to ensure a seamless typing experience. Furthermore, using the button itself to provide success feedback (e.g., "Refreshed") for background refreshes provides a clean, modern alternative to intrusive popups.
 **Action:** Always map tab selections to their corresponding input widgets for automatic focusing. Use temporary button label/color shifts for non-disruptive interaction confirmation.
 
-## 2026-06-14 - Interactive Live Search and Empty State Guidance
-**Learning:** In applications with long lists or message histories, live search with immediate feedback reduces user effort compared to explicit "Search" button clicks. Furthermore, providing centered placeholder text when searches or lists are empty (e.g., "No messages found matching 'query'") confirms that the system is active and responsive, rather than just broken or loading.
-**Action:** Implement debounced KeyRelease events for search inputs to provide live filtering, and always include "empty state" placeholders for dynamic text displays.
+## 2026-06-14 - Interactive Search and Context-Aware Loading
+**Learning:** Adding live "search-as-you-type" functionality with a debounce mechanism significantly improves the perceived speed and utility of message filtering. Furthermore, automatically refreshing content like audit logs when their tab is selected removes the friction of manual "Refresh" clicks.
+**Action:** Use 'self.after' and 'self.after_cancel' to implement debounced interactions for search inputs. Always identify tabs that represent dynamic data and refresh them automatically on selection.
