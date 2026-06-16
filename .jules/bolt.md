@@ -21,3 +21,7 @@
 ## 2025-05-20 - [Strategic Composite Indexes]
 **Learning:** Separate indexes on individual columns often fail to optimize queries with multiple `WHERE` clauses and an `ORDER BY` clause. Following the ESR (Equality, Sort, Range) rule by creating a composite index (e.g., `(recipient, is_deleted, timestamp)`) allows SQLite to satisfy the entire query via a single index scan, providing a ~100x speedup in retrieval.
 **Action:** Analyze query plans with `EXPLAIN QUERY PLAN` and prefer composite indexes that match the filtering and sorting requirements of the application's most frequent queries.
+
+## 2025-05-21 - [Linear-time Data Collection & UI Batching]
+**Learning:** Python's iterative bytes concatenation is O(n²) because bytes are immutable, leading to significant slowdowns in network recv loops. Additionally, individual 'insert' calls to Tkinter Text widgets trigger expensive layout recalculations for every line.
+**Action:** Use 'b"".join(chunks)' for socket data accumulation and join strings with "\n" for single-call UI text insertions to achieve O(n) and O(1) performance respectively.
