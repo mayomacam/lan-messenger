@@ -156,8 +156,7 @@ class NetworkManager:
         chunks = []
         received = 0
         while received < n:
-            # Use 64KB buffer for consistency and performance
-            chunk = sock.recv(min(65536, n - received))
+            chunk = sock.recv(n - received)
             if not chunk:
                 return None
             chunks.append(chunk)
