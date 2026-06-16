@@ -22,6 +22,6 @@
 **Learning:** Separate indexes on individual columns often fail to optimize queries with multiple `WHERE` clauses and an `ORDER BY` clause. Following the ESR (Equality, Sort, Range) rule by creating a composite index (e.g., `(recipient, is_deleted, timestamp)`) allows SQLite to satisfy the entire query via a single index scan, providing a ~100x speedup in retrieval.
 **Action:** Analyze query plans with `EXPLAIN QUERY PLAN` and prefer composite indexes that match the filtering and sorting requirements of the application's most frequent queries.
 
-## 2025-05-21 - [Batched UI Insertions and Event Debouncing]
-**Learning:** Calling Tkinter's `insert()` method in a loop for each data item (e.g., messages or logs) triggers expensive layout and rendering updates for every call. Accumulating data into a list and performing a single batched `insert("\n".join(lines))` significantly reduces CPU usage. Additionally, debouncing UI refreshes (e.g., 100ms) prevents "UI thrashing" during high-frequency events like message bursts.
-**Action:** Always batch text insertions into Text/Textbox widgets and implement debouncing for methods that refresh the UI in response to network or database events.
+## 2025-05-21 - [Linear-time Data Collection & UI Batching]
+**Learning:** Python's iterative bytes concatenation is O(n²) because bytes are immutable, leading to significant slowdowns in network recv loops. Additionally, individual 'insert' calls to Tkinter Text widgets trigger expensive layout recalculations for every line.
+**Action:** Use 'b"".join(chunks)' for socket data accumulation and join strings with "\n" for single-call UI text insertions to achieve O(n) and O(1) performance respectively.
