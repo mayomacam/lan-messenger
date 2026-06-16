@@ -446,8 +446,8 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
-    def _get_ttl_seconds(self):
-        val = self.ttl_var.get()
+    def _get_ttl_seconds(self, var=None):
+        val = var.get() if var else self.ttl_var.get()
         if val == "1m": return 60
         if val == "1h": return 3600
         if val == "1d": return 86400
