@@ -72,6 +72,7 @@ class LANMessengerApp(ctk.CTk):
         self.private_chats = {} # ip -> CTkTextbox
         self.private_chat_tabs = {} # tab_name -> ip
         self.private_entries = {} # ip -> CTkEntry
+        self._private_chat_after_ids = {}
         self._last_peers_snapshot = ""
         self._search_timer = None
         self._last_search_query = ""
@@ -375,11 +376,10 @@ class LANMessengerApp(ctk.CTk):
             self.refresh_peers()
 
     def refresh_peers(self):
-        # Update peer trust levels from DB
-        for ip in self.peers:
-            peer_info = self.db.get_trusted_peer(ip)
-            if peer_info:
-                self.peer_trust[ip] = peer_info[3]
+        # Update peer trust levels from DB in batch
+        trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
+        for ip, trust in trust_levels.items():
+            self.peer_trust[ip] = trust
 
         # Prevent unnecessary UI rebuilds using snapshot comparison
         current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust}, sort_keys=True)
@@ -486,8 +486,6 @@ class LANMessengerApp(ctk.CTk):
                 self.current_private_peer = peer_ip
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
-        elif tab == "Audit Logs":
-            self.load_audit_logs()
 
     def on_search_key(self, event):
         # Throttle live search
@@ -502,10 +500,6 @@ class LANMessengerApp(ctk.CTk):
         self.search_entry.delete(0, "end")
         self.load_chat_history()
         self.search_entry.focus_set()
-
-    def clear_search(self):
-        self.search_entry.delete(0, "end")
-        self.load_chat_history()
 
     def load_chat_history(self):
         if self._search_timer:
