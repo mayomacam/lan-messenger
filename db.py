@@ -98,16 +98,7 @@ class Database:
             cursor.execute("DROP INDEX IF EXISTS idx_messages_deleted_timestamp")
             cursor.execute("DROP INDEX IF EXISTS idx_messages_recipient")
 
-            # Trusted Peers table (TOFU)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS trusted_peers (
-                    ip TEXT PRIMARY KEY,
-                    fingerprint TEXT NOT NULL,
-                    last_seen REAL NOT NULL
-                )
-            """)
-
-            # Files table: id, filename, path, size, owner_ip, is_folder
+            # Files table: id, filename, path, size, owner_ip, is_folder, checksum, expires_at
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
                     id TEXT PRIMARY KEY,
@@ -116,17 +107,21 @@ class Database:
                     size INTEGER,
                     owner_ip TEXT NOT NULL,
                     is_folder BOOLEAN DEFAULT 0,
-                    checksum TEXT
+                    checksum TEXT,
+                    expires_at REAL
                 )
             """)
 
-            # Migration: add checksum column to files table if it doesn't exist (for existing DBs)
+            # Migration: add columns to files table if they don't exist
             cursor.execute("PRAGMA table_info(files)")
             columns = [info[1] for info in cursor.fetchall()]
             if 'checksum' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN checksum TEXT")
+            if 'expires_at' not in columns:
+                cursor.execute("ALTER TABLE files ADD COLUMN expires_at REAL")
 
             # Trusted Peers table: ip, username, fingerprint, trust_level, last_seen
+            # New installations use this schema
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trusted_peers (
                     ip TEXT PRIMARY KEY,
@@ -136,6 +131,24 @@ class Database:
                     last_seen REAL
                 )
             """)
+            # Migration for existing installations with old 3-column schema (ip, fingerprint, last_seen)
+            cursor.execute("PRAGMA table_info(trusted_peers)")
+            tp_columns = [info[1] for info in cursor.fetchall()]
+            if 'username' not in tp_columns:
+                # SQLite doesn't allow adding columns in the middle.
+                # To maintain (ip, username, fingerprint, trust_level, last_seen) order:
+                if len(tp_columns) == 3 and tp_columns[1] == 'fingerprint':
+                    # This is the old schema. We need to rename and recreate or just append.
+                    # Appending is safer than re-creating for P2P.
+                    # But the code expects a certain order.
+                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
+                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
+                    # Now it has (ip, fingerprint, last_seen, username, trust_level)
+                else:
+                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
+            if 'trust_level' not in tp_columns:
+                if 'trust_level' not in [info[1] for info in cursor.execute("PRAGMA table_info(trusted_peers)").fetchall()]:
+                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
 
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
@@ -210,18 +223,46 @@ class Database:
             with self.conn:
                 self.conn.execute("UPDATE messages SET content = ? WHERE id = ?", (encrypted_content, msg_id))
 
-    def add_file(self, filename: str, path: str, size: int, owner_ip: str, is_folder: bool = False, checksum: str = None) -> str:
+    def add_file(self, filename: str, path: str, size: int, owner_ip: str, is_folder: bool = False, checksum: str = None, ttl: int = None) -> str:
         file_id = str(uuid.uuid4())
+        expires_at = time.time() + ttl if ttl else None
+        encrypted_filename = self.cipher.encrypt(filename)
+        encrypted_path = self.cipher.encrypt(path)
         with self.lock:
             with self.conn:
-                self.conn.execute("INSERT INTO files (id, filename, path, size, owner_ip, is_folder, checksum) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                 (file_id, filename, path, size, owner_ip, is_folder, checksum))
+                self.conn.execute("INSERT INTO files (id, filename, path, size, owner_ip, is_folder, checksum, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                 (file_id, encrypted_filename, encrypted_path, size, owner_ip, is_folder, checksum, expires_at))
         return file_id
 
     def get_files(self) -> List[Tuple]:
+        now = time.time()
         with self.lock:
-            cursor = self.conn.execute("SELECT * FROM files")
-            return cursor.fetchall()
+            cursor = self.conn.execute("SELECT id, filename, path, size, owner_ip, is_folder, checksum, expires_at FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
+            rows = cursor.fetchall()
+            decrypted_rows = []
+            for row in rows:
+                decrypted_filename = self.cipher.decrypt(row[1])
+                decrypted_path = self.cipher.decrypt(row[2])
+                decrypted_rows.append((row[0], decrypted_filename, decrypted_path, row[3], row[4], row[5], row[6], row[7]))
+            return decrypted_rows
+
+    def is_file_shared(self, path: str) -> bool:
+        """Check if a file path is currently shared and not expired."""
+        now = time.time()
+        files = self.get_files() # Decrypts all filenames and paths
+        for f in files:
+            # f: (id, filename, path, size, owner_ip, is_folder, checksum, expires_at)
+            if f[2] == path:
+                return True
+        return False
+
+    def delete_expired_files(self) -> int:
+        """Purge files that have passed their expiration time. Returns count of deleted files."""
+        now = time.time()
+        with self.lock:
+            with self.conn:
+                cursor = self.conn.execute("DELETE FROM files WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
+                return cursor.rowcount
 
     def delete_expired_messages(self) -> int:
         """Purge messages that have passed their expiration time. Returns count of deleted messages."""
@@ -241,12 +282,14 @@ class Database:
                     ON CONFLICT(ip) DO UPDATE SET
                         username=excluded.username,
                         fingerprint=excluded.fingerprint,
+                        trust_level=excluded.trust_level,
                         last_seen=excluded.last_seen
                 """, (ip, username, fingerprint, trust_level, now))
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
-            cursor = self.conn.execute("SELECT * FROM trusted_peers WHERE ip = ?", (ip,))
+            # Explicitly select columns to handle schema variations gracefully
+            cursor = self.conn.execute("SELECT ip, username, fingerprint, trust_level, last_seen FROM trusted_peers WHERE ip = ?", (ip,))
             return cursor.fetchone()
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:

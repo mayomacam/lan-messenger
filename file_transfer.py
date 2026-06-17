@@ -74,15 +74,17 @@ class FileTransferManager:
         logger = audit.get_logger()
         existing = self.db.get_trusted_peer(ip)
         if existing:
-            old_fingerprint, _ = existing
+            # existing: (ip, username, fingerprint, trust_level, last_seen)
+            stored_username = existing[1]
+            old_fingerprint = existing[2]
             if old_fingerprint != fingerprint:
                 msg = f"SECURITY ALERT: Certificate fingerprint mismatch for {ip} during file transfer!"
                 print(f"[DEBUG] {msg}")
                 if logger: logger.log("SECURITY_ALERT", msg)
             else:
-                self.db.add_trusted_peer(ip, fingerprint)
+                self.db.add_trusted_peer(ip, stored_username or "Unknown", fingerprint)
         else:
-            self.db.add_trusted_peer(ip, fingerprint)
+            self.db.add_trusted_peer(ip, "Unknown", fingerprint)
 
     def handle_client(self, client, addr):
         """Handle a client connection.
@@ -136,10 +138,18 @@ class FileTransferManager:
                 if not isinstance(path, str):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed PULL_FILE request from {addr[0]}: path must be a string.")
                     return
-                # Sanitize path to prevent directory traversal
-                if ".." in path or os.path.isabs(path) or path.startswith("/") or path.startswith("\\"):
+
+                # Security: Check if file is shared and not expired
+                if not self.db.is_file_shared(path):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized PULL_FILE request from {addr[0]}: {path}")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
+
+                # Sanitize path to prevent directory traversal (Defense in Depth)
+                if ".." in path:
                     if logger: logger.log("SECURITY_ALERT", f"Blocked potential directory traversal attempt from {addr[0]}: {path}")
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
                     return
 
                 if os.path.exists(path) and os.path.isfile(path):
@@ -154,8 +164,8 @@ class FileTransferManager:
                             if not data: break
                             client.sendall(data)
                 else:
-                    if logger: logger.log("SECURITY_ALERT", f"Requested file '{path}' not found for {addr[0]}.")
-                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found'}).encode())
+                    if logger: logger.log("SECURITY_ALERT", f"Requested file '{path}' not found or expired for {addr[0]}.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found or expired'}).encode())
 
             elif cmd == 'LIST_SHARED':
                 files = self.db.get_files()
@@ -228,12 +238,13 @@ class FileTransferManager:
                 received += len(data)
         print(f"[DEBUG] Received {filename}")
 
-    def download_file(self, target_ip, remote_path, expected_checksum=None):
+    def download_file(self, target_ip, remote_path, expected_checksum=None, target_port=None):
         filename = os.path.basename(remote_path)
         try:
+            port = target_port if target_port else self.port
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
                 raw.settimeout(10)
-                raw.connect((target_ip, self.port))
+                raw.connect((target_ip, port))
                 s = wrap_socket(raw)
 
                 # TOFU: check peer fingerprint
@@ -416,11 +427,12 @@ class FileTransferManager:
             received += len(chunk)
         return b"".join(chunks)
 
-    def get_shared_files(self, target_ip):
+    def get_shared_files(self, target_ip, target_port=None):
         try:
+            port = target_port if target_port else self.port
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
                 raw.settimeout(5)
-                raw.connect((target_ip, self.port))
+                raw.connect((target_ip, port))
                 s = wrap_socket(raw)
 
                 # TOFU: check peer fingerprint
