@@ -25,3 +25,7 @@
 ## 2025-05-21 - [Linear-time Data Collection & UI Batching]
 **Learning:** Python's iterative bytes concatenation is O(n²) because bytes are immutable, leading to significant slowdowns in network recv loops. Additionally, individual 'insert' calls to Tkinter Text widgets trigger expensive layout recalculations for every line.
 **Action:** Use 'b"".join(chunks)' for socket data accumulation and join strings with "\n" for single-call UI text insertions to achieve O(n) and O(1) performance respectively.
+
+## 2025-05-22 - [Lock Contention and DB Batching]
+**Learning:** Holding a database lock while performing CPU-intensive tasks like AES decryption blocks all other database operations, including writes from network threads. Additionally, performing multiple individual lookups in a loop (O(N)) is significantly slower than a single batch query (O(1)) due to repeated lock acquisition and SQL execution overhead.
+**Action:** Move CPU-bound post-processing outside of database locks and implement batch lookup methods (e.g., using SQL 'IN' clauses) to minimize lock contention and improve overall throughput.

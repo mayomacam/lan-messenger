@@ -203,12 +203,14 @@ class Database:
                 """, (now, limit))
 
             rows = cursor.fetchall()
-            decrypted_rows = []
-            for row in rows:
-                decrypted_content = self.cipher.decrypt(row[2])
-                # Return 7 columns now
-                decrypted_rows.append((row[0], row[1], decrypted_content, row[3], row[4], row[5], row[6]))
-            return decrypted_rows[::-1]
+
+        # Decrypt outside of the lock to reduce lock contention
+        decrypted_rows = []
+        for row in rows:
+            decrypted_content = self.cipher.decrypt(row[2])
+            # Return 7 columns
+            decrypted_rows.append((row[0], row[1], decrypted_content, row[3], row[4], row[5], row[6]))
+        return decrypted_rows[::-1]
 
     def delete_message(self, msg_id: str):
         with self.lock:
@@ -289,6 +291,16 @@ class Database:
             # Explicitly select columns to handle schema variations gracefully
             cursor = self.conn.execute("SELECT ip, username, fingerprint, trust_level, last_seen FROM trusted_peers WHERE ip = ?", (ip,))
             return cursor.fetchone()
+
+    def get_peer_trust_levels(self, ips: List[str]) -> dict:
+        """Batch fetch trust levels for multiple IPs to reduce DB roundtrips."""
+        ips_list = list(ips)
+        if not ips_list:
+            return {}
+        placeholders = ",".join(["?"] * len(ips_list))
+        with self.lock:
+            cursor = self.conn.execute(f"SELECT ip, trust_level FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
+            return {row[0]: row[1] for row in cursor.fetchall()}
 
     def update_peer_trust(self, ip: str, trust_level: str):
         with self.lock:

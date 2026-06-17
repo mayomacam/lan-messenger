@@ -388,11 +388,10 @@ class LANMessengerApp(ctk.CTk):
             self.refresh_peers()
 
     def refresh_peers(self):
-        # Update peer trust levels from DB
+        # Update peer trust levels from DB in batch
+        trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
         for ip in self.peers:
-            peer_info = self.db.get_trusted_peer(ip)
-            if peer_info:
-                self.peer_trust[ip] = peer_info[3]
+            self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
 
         # Prevent unnecessary UI rebuilds using snapshot comparison
         current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust}, sort_keys=True)
