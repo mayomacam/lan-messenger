@@ -146,9 +146,10 @@ class FileTransferManager:
                     return
 
                 # Sanitize path to prevent directory traversal (Defense in Depth)
-                if ".." in path or os.path.isabs(path) or path.startswith("/") or path.startswith("\\"):
+                if ".." in path:
                     if logger: logger.log("SECURITY_ALERT", f"Blocked potential directory traversal attempt from {addr[0]}: {path}")
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
                     return
 
                 if os.path.exists(path) and os.path.isfile(path):
