@@ -21,3 +21,7 @@
 ## 2026-06-14 - Interactive Search and Context-Aware Loading
 **Learning:** Adding live "search-as-you-type" functionality with a debounce mechanism significantly improves the perceived speed and utility of message filtering. Furthermore, automatically refreshing content like audit logs when their tab is selected removes the friction of manual "Refresh" clicks.
 **Action:** Use 'self.after' and 'self.after_cancel' to implement debounced interactions for search inputs. Always identify tabs that represent dynamic data and refresh them automatically on selection.
+
+## 2026-06-15 - Standardizing Feature Controls and Enhancing Bulk Actions
+**Learning:** Inconsistent options and overlapping UI elements for the same feature (like message TTL) across different tabs can confuse users. Standardizing these controls with descriptive labels like "Burn:" and providing bulk actions like "Select All" in file views significantly improves interface predictability and efficiency.
+**Action:** Always verify feature parity and consistent layout patterns when a functionality is replicated across different application contexts (e.g., Global vs Private chat). Ensure data-heavy views have intuitive bulk interaction options.

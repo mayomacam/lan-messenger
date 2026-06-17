@@ -72,6 +72,7 @@ class LANMessengerApp(ctk.CTk):
         self.private_chats = {} # ip -> CTkTextbox
         self.private_chat_tabs = {} # tab_name -> ip
         self.private_entries = {} # ip -> CTkEntry
+        self._private_chat_after_ids = {} # ip -> after_id
         self._last_peers_snapshot = ""
         self._search_timer = None
         self._last_search_query = ""
@@ -222,19 +223,14 @@ class LANMessengerApp(ctk.CTk):
         self.msg_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.msg_entry.bind("<Return>", self.send_message)
 
-        # TTL Option
-        self.ttl_var = ctk.StringVar(value="Off")
-        self.ttl_dropdown = ctk.CTkOptionMenu(self.input_frame, values=["Off", "1m", "1h", "1d"], variable=self.ttl_var, width=70)
-        self.ttl_dropdown.grid(row=0, column=1, padx=5, pady=10)
-
-        self.send_btn = ctk.CTkButton(self.input_frame, text="Send", width=80, command=self.send_message)
-        self.send_btn.grid(row=0, column=2, padx=10, pady=10)
-
         # -- TTL Selector --
         self.ttl_var = ctk.StringVar(value="Off")
+        ctk.CTkLabel(self.input_frame, text="Burn:").grid(row=0, column=1, padx=(10, 0))
         self.ttl_menu = ctk.CTkOptionMenu(self.input_frame, values=["Off", "1m", "10m", "1h", "1d"], variable=self.ttl_var, width=80)
-        self.ttl_menu.grid(row=0, column=2, padx=10, pady=10)
-        ctk.CTkLabel(self.input_frame, text="Burn:").grid(row=0, column=3, padx=(0, 10))
+        self.ttl_menu.grid(row=0, column=2, padx=5, pady=10)
+
+        self.send_btn = ctk.CTkButton(self.input_frame, text="Send", width=80, command=self.send_message)
+        self.send_btn.grid(row=0, column=3, padx=10, pady=10)
 
         # -- Search Bar --
         self.search_frame = ctk.CTkFrame(self.chat_tab)
@@ -293,6 +289,9 @@ class LANMessengerApp(ctk.CTk):
 
         self.refresh_files_btn = ctk.CTkButton(self.file_source_frame, text="Refresh", width=80, command=self.refresh_files_view)
         self.refresh_files_btn.pack(side="right", padx=5)
+
+        self.select_all_btn = ctk.CTkButton(self.file_source_frame, text="Select All", width=80, command=self.select_all_files, state="disabled")
+        self.select_all_btn.pack(side="right", padx=5)
 
         self.files_scroll = ctk.CTkScrollableFrame(self.files_tab, label_text="Files")
         self.files_scroll.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
@@ -500,8 +499,6 @@ class LANMessengerApp(ctk.CTk):
                 self.current_private_peer = peer_ip
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
-        elif tab == "Audit Logs":
-            self.load_audit_logs()
 
     def on_search_key(self, event):
         # Throttle live search
@@ -516,10 +513,6 @@ class LANMessengerApp(ctk.CTk):
         self.search_entry.delete(0, "end")
         self.load_chat_history()
         self.search_entry.focus_set()
-
-    def clear_search(self):
-        self.search_entry.delete(0, "end")
-        self.load_chat_history()
 
     def load_chat_history(self):
         if self._search_timer:
@@ -565,8 +558,8 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
-    def _get_ttl_seconds(self, var_name="chat"):
-        val = self.ttl_var.get() if var_name == "chat" else self.file_ttl_var.get()
+    def get_ttl_seconds(self, var=None):
+        val = var.get() if var else self.ttl_var.get()
         if val == "1m": return 60
         if val == "10m": return 600
         if val == "1h": return 3600
@@ -576,7 +569,8 @@ class LANMessengerApp(ctk.CTk):
     def send_message(self, event=None):
         msg = self.msg_entry.get()
         if not msg: return
-        ttl = self._get_ttl_seconds(var_name="chat")
+        ttl = self.get_ttl_seconds()
+
         expires_at = (time.time() + ttl) if ttl else None
 
         # If we are in a private chat tab, send private message
@@ -630,19 +624,16 @@ class LANMessengerApp(ctk.CTk):
 
             # Private TTL
             priv_ttl_var = ctk.StringVar(value=self.ttl_var.get())
-            priv_ttl_dropdown = ctk.CTkOptionMenu(input_frame, values=["Off", "1m", "1h", "1d"], variable=priv_ttl_var, width=70)
-            priv_ttl_dropdown.grid(row=0, column=1, padx=5, pady=10)
+            ctk.CTkLabel(input_frame, text="Burn:").grid(row=0, column=1, padx=(10, 0))
+            priv_ttl_dropdown = ctk.CTkOptionMenu(input_frame, values=["Off", "1m", "10m", "1h", "1d"], variable=priv_ttl_var, width=80)
+            priv_ttl_dropdown.grid(row=0, column=2, padx=5, pady=10)
 
             def send_priv(e=None, i=ip, ent=entry, tvar=priv_ttl_var):
                 m = ent.get()
                 if not m: return
 
                 # Get TTL
-                tval = tvar.get()
-                ttl_sec = None
-                if tval == "1m": ttl_sec = 60
-                elif tval == "1h": ttl_sec = 3600
-                elif tval == "1d": ttl_sec = 86400
+                ttl_sec = self.get_ttl_seconds(var=tvar)
 
                 exp_at = (time.time() + ttl_sec) if ttl_sec else None
 
@@ -653,7 +644,7 @@ class LANMessengerApp(ctk.CTk):
 
             entry.bind("<Return>", send_priv)
             btn = ctk.CTkButton(input_frame, text="Send", width=80, command=send_priv)
-            btn.grid(row=0, column=2, padx=10, pady=10)
+            btn.grid(row=0, column=3, padx=10, pady=10)
 
             self.private_chats[ip] = display
             self.private_entries[ip] = entry
@@ -774,13 +765,20 @@ class LANMessengerApp(ctk.CTk):
     def show_my_files(self):
         self.current_file_view_source = "Local"
         self.source_label.configure(text="Viewing: Local Shared Files")
+        self.select_all_btn.configure(state="disabled")
         self.refresh_files_view()
+
+    def select_all_files(self):
+        for chk_var, _ in self.file_checkboxes:
+            chk_var.set(1)
 
     def browse_peer_files(self, ip, name):
         self.current_file_view_source = ip
         self.source_label.configure(text=f"Viewing: {name}'s Files")
+        self.select_all_btn.configure(state="normal")
         self.tabview.set("Files")
         self.refresh_files_view()
+
     def refresh_files_view(self):
         # Non-blocking success feedback
         self.refresh_files_btn.configure(text="Refreshed", fg_color="#2ecc71")
@@ -794,6 +792,7 @@ class LANMessengerApp(ctk.CTk):
             w.destroy()
         if self.current_file_view_source == "Local":
             self.download_btn.configure(state="disabled")
+            self.select_all_btn.configure(state="disabled")
             files = self.db.get_files()
             file_data = []
             for f in files:
