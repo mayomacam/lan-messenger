@@ -294,11 +294,12 @@ class Database:
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         """Batch fetch trust levels for multiple IPs to reduce DB roundtrips."""
-        if not ips:
+        ips_list = list(ips)
+        if not ips_list:
             return {}
-        placeholders = ",".join(["?"] * len(ips))
+        placeholders = ",".join(["?"] * len(ips_list))
         with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, trust_level FROM trusted_peers WHERE ip IN ({placeholders})", ips)
+            cursor = self.conn.execute(f"SELECT ip, trust_level FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
             return {row[0]: row[1] for row in cursor.fetchall()}
 
     def update_peer_trust(self, ip: str, trust_level: str):
