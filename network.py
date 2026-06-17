@@ -13,11 +13,12 @@ from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
 class DiscoveryManager:
-    def __init__(self, username, chat_port, callback_new_peer, auth_token=None):
+    def __init__(self, username, chat_port, callback_new_peer, auth_token=None, db=None):
         self.username = username
         self.chat_port = chat_port
         self.callback = callback_new_peer
         self.auth_token = auth_token
+        self.db = db
         self.udp_port = UDP_BROADCAST_PORT
         self.running = True
 
@@ -76,6 +77,13 @@ class DiscoveryManager:
                     continue
                 if packet.get('type') == 'DISCOVERY':
                     peer_ip = addr[0]
+
+                    # Security: check if peer is blocked
+                    if self.db:
+                        peer_info = self.db.get_trusted_peer(peer_ip)
+                        if peer_info and peer_info[8]: # is_blocked
+                            continue
+
                     peer_username = packet.get('username')
                     if not isinstance(peer_username, str):
                         continue
@@ -290,6 +298,14 @@ class NetworkManager:
                     self._send_json(client, {'status': 'ERR', 'msg': 'Authentication failed'})
                     return
 
+            # Peer permission checks
+            peer_info = self.db.get_trusted_peer(addr[0])
+            if peer_info:
+                # peer_info: (ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked)
+                if peer_info[8]: # is_blocked
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked peer {addr[0]} tried to connect.")
+                    return
+
             # Existing message handling with validation
             msg_type = data.get('type')
             if not isinstance(msg_type, str):
@@ -302,6 +318,9 @@ class NetworkManager:
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
 
             elif msg_type == 'MSG':
+                if peer_info and not peer_info[5]: # can_chat
+                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} attempted to send MSG without chat permission.")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -314,6 +333,9 @@ class NetworkManager:
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
             elif msg_type == 'MSG_PRIV':
+                if peer_info and not peer_info[5]: # can_chat
+                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} attempted to send MSG_PRIV without chat permission.")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -327,6 +349,8 @@ class NetworkManager:
                 if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])
 
             elif msg_type == 'MSG_EDIT':
+                if peer_info and not peer_info[5]: # can_chat
+                    return
                 msg_id = data.get('id')
                 new_content = data.get('content')
                 if not all(isinstance(x, str) for x in [msg_id, new_content]):
@@ -335,6 +359,8 @@ class NetworkManager:
                 if self.callback: self.callback('EDIT', msg_id, new_content)
 
             elif msg_type == 'MSG_DEL':
+                if peer_info and not peer_info[5]: # can_chat
+                    return
                 msg_id = data.get('id')
                 if not isinstance(msg_id, str): return
                 self.db.delete_message(msg_id)
