@@ -25,3 +25,7 @@
 ## 2026-06-15 - Standardizing Feature Controls and Enhancing Bulk Actions
 **Learning:** Inconsistent options and overlapping UI elements for the same feature (like message TTL) across different tabs can confuse users. Standardizing these controls with descriptive labels like "Burn:" and providing bulk actions like "Select All" in file views significantly improves interface predictability and efficiency.
 **Action:** Always verify feature parity and consistent layout patterns when a functionality is replicated across different application contexts (e.g., Global vs Private chat). Ensure data-heavy views have intuitive bulk interaction options.
+
+## 2026-06-18 - Keyboard accessibility for search components
+**Learning:** Adding the `Esc` key shortcut for clearing search bars is a standard UX pattern that improves keyboard accessibility and efficiency for power users, complementing visual clear buttons.
+**Action:** Always ensure interactive filtering or search components have consistent keyboard-driven reset mechanisms (like the Escape key).

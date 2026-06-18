@@ -241,6 +241,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
         self.search_entry.bind("<KeyRelease>", self.on_search_key)
+        self.search_entry.bind("<Escape>", lambda e: self.clear_search())
 
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
