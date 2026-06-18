@@ -17,58 +17,6 @@ from config import load_settings, save_settings
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-class PeerSecurityDialog(ctk.CTkToplevel):
-    def __init__(self, parent, db, ip, name, logger, on_update):
-        super().__init__(parent)
-        self.title(f"Security: {name}")
-        self.geometry("350x450")
-        self.db = db
-        self.ip = ip
-        self.name = name
-        self.logger = logger
-        self.on_update = on_update
-
-        # Load current state
-        peer = self.db.get_trusted_peer(ip)
-        # peer: (ip, username, fingerprint, trust_level, last_seen, can_chat, can_list, can_down, blocked)
-        self.can_chat = tk.BooleanVar(value=bool(peer[5]))
-        self.can_list = tk.BooleanVar(value=bool(peer[6]))
-        self.can_down = tk.BooleanVar(value=bool(peer[7]))
-        self.is_blocked = tk.BooleanVar(value=bool(peer[8]))
-
-        self.create_widgets()
-
-    def create_widgets(self):
-        ctk.CTkLabel(self, text=f"Manage Peer Security", font=("Arial", 16, "bold")).pack(pady=10)
-        ctk.CTkLabel(self, text=f"IP: {self.ip}").pack()
-
-        frame = ctk.CTkFrame(self)
-        frame.pack(fill="both", expand=True, padx=20, pady=20)
-
-        ctk.CTkSwitch(frame, text="Allow Global Chat", variable=self.can_chat).pack(anchor="w", pady=10, padx=10)
-        ctk.CTkSwitch(frame, text="Allow File Listing", variable=self.can_list).pack(anchor="w", pady=10, padx=10)
-        ctk.CTkSwitch(frame, text="Allow File Download", variable=self.can_down).pack(anchor="w", pady=10, padx=10)
-
-        ctk.CTkLabel(frame, text="--- Critical Actions ---", text_color="gray").pack(pady=(20, 5))
-
-        self.block_switch = ctk.CTkSwitch(frame, text="BLOCK PEER", variable=self.is_blocked, progress_color="red")
-        self.block_switch.pack(anchor="w", pady=10, padx=10)
-
-        self.save_btn = ctk.CTkButton(self, text="Save Changes", command=self.save)
-        self.save_btn.pack(pady=20)
-
-    def save(self):
-        self.db.update_peer_permissions(
-            self.ip,
-            self.can_chat.get(),
-            self.can_list.get(),
-            self.can_down.get(),
-            self.is_blocked.get()
-        )
-        self.logger.log("SECURITY_POLICY_CHANGE", f"Updated permissions for {self.ip}: Chat={self.can_chat.get()}, List={self.can_list.get()}, Down={self.can_down.get()}, Blocked={self.is_blocked.get()}")
-        self.on_update()
-        self.destroy()
-
 class LANMessengerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -116,8 +64,7 @@ class LANMessengerApp(ctk.CTk):
             username=self.username,
             chat_port=self.settings["tcp_chat_port"],
             callback_new_peer=lambda ip, name: self.on_network_event('NEW_PEER', ip, name),
-            auth_token=self.settings.get("auth_token") or None,
-            db=self.db
+            auth_token=self.settings.get("auth_token") or None
         )
 
         self.peers = {} # ip -> username
@@ -266,7 +213,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.chat_display.tag_config("search_info", foreground="#3B8ED0")
+        self.chat_display.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -440,9 +387,6 @@ class LANMessengerApp(ctk.CTk):
             self.peer_trust[ip] = 'trusted'
             self.refresh_peers()
 
-    def open_peer_security(self, ip, name):
-        PeerSecurityDialog(self, self.db, ip, name, self.logger, self.refresh_peers)
-
     def refresh_peers(self):
         # Update peer trust levels from DB in batch
         trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
@@ -477,10 +421,6 @@ class LANMessengerApp(ctk.CTk):
             btn_chat = ctk.CTkButton(row, text="Chat", width=60, height=20,
                               command=lambda i=ip, n=name: self.open_private_chat(i, n))
             btn_chat.pack(side="right", padx=2)
-
-            btn_sec = ctk.CTkButton(row, text="Sec", width=40, height=20, fg_color="#34495e",
-                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
-            btn_sec.pack(side="right", padx=2)
 
             # Trust indicator
             trust = self.peer_trust.get(ip, 'untrusted')
