@@ -4,6 +4,7 @@ import time
 import threading
 import os
 import base64
+import functools
 from typing import List, Tuple
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -38,6 +39,7 @@ class EncryptionManager:
         ciphertext = self.aesgcm.encrypt(nonce, data.encode(), None)
         return "enc:" + base64.b64encode(nonce + ciphertext).decode()
 
+    @functools.lru_cache(maxsize=1024)
     def decrypt(self, encrypted_data: str) -> str:
         if not encrypted_data: return ""
         if not encrypted_data.startswith("enc:"):
@@ -240,20 +242,27 @@ class Database:
         with self.lock:
             cursor = self.conn.execute("SELECT id, filename, path, size, owner_ip, is_folder, checksum, expires_at FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
             rows = cursor.fetchall()
-            decrypted_rows = []
-            for row in rows:
-                decrypted_filename = self.cipher.decrypt(row[1])
-                decrypted_path = self.cipher.decrypt(row[2])
-                decrypted_rows.append((row[0], decrypted_filename, decrypted_path, row[3], row[4], row[5], row[6], row[7]))
-            return decrypted_rows
+
+        # Decrypt outside of the lock to reduce lock contention
+        decrypted_rows = []
+        for row in rows:
+            decrypted_filename = self.cipher.decrypt(row[1])
+            decrypted_path = self.cipher.decrypt(row[2])
+            decrypted_rows.append((row[0], decrypted_filename, decrypted_path, row[3], row[4], row[5], row[6], row[7]))
+        return decrypted_rows
 
     def is_file_shared(self, path: str) -> bool:
         """Check if a file path is currently shared and not expired."""
         now = time.time()
-        files = self.get_files() # Decrypts all filenames and paths
-        for f in files:
-            # f: (id, filename, path, size, owner_ip, is_folder, checksum, expires_at)
-            if f[2] == path:
+        with self.lock:
+            # Fetch only the path column to reduce data transfer and decryption overhead
+            cursor = self.conn.execute("SELECT path FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
+            rows = cursor.fetchall()
+
+        # Check outside the lock; early exit when match is found
+        for row in rows:
+            decrypted_path = self.cipher.decrypt(row[0])
+            if decrypted_path == path:
                 return True
         return False
 
