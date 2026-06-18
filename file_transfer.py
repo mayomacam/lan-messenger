@@ -120,15 +120,6 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Authentication failed'}).encode())
                     return
                 # token matches – continue processing
-
-            # Peer permission checks
-            peer_info = self.db.get_trusted_peer(addr[0])
-            if peer_info:
-                # peer_info: (ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked)
-                if peer_info[8]: # is_blocked
-                    if logger: logger.log("SECURITY_ALERT", f"Blocked peer {addr[0]} tried to initiate file transfer.")
-                    return
-
             cmd = req.get('cmd')
             if not isinstance(cmd, str): return
 
@@ -143,11 +134,6 @@ class FileTransferManager:
                 self.receive_stream(client, filename, size)
 
             elif cmd == 'PULL_FILE':
-                if peer_info and not peer_info[7]: # can_download_files
-                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} attempted to download file without permission.")
-                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Download permission denied'}).encode())
-                    return
-
                 path = req.get('path')
                 if not isinstance(path, str):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed PULL_FILE request from {addr[0]}: path must be a string.")
@@ -182,10 +168,6 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found or expired'}).encode())
 
             elif cmd == 'LIST_SHARED':
-                if peer_info and not peer_info[6]: # can_list_files
-                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} attempted to list files without permission.")
-                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Listing permission denied'}).encode())
-                    return
                 files = self.db.get_files()
                 file_list = []
                 for f in files:
@@ -204,10 +186,6 @@ class FileTransferManager:
                 client.sendall(data_encoded)
 
             elif cmd == 'LIST_FOLDER':
-                if peer_info and not peer_info[6]: # can_list_files
-                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} attempted to list folder without permission.")
-                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Listing permission denied'}).encode())
-                    return
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 path_str = req.get('path')
                 if not isinstance(path_str, str):
