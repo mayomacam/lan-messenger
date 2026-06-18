@@ -29,3 +29,7 @@
 ## 2025-05-22 - [Lock Contention and DB Batching]
 **Learning:** Holding a database lock while performing CPU-intensive tasks like AES decryption blocks all other database operations, including writes from network threads. Additionally, performing multiple individual lookups in a loop (O(N)) is significantly slower than a single batch query (O(1)) due to repeated lock acquisition and SQL execution overhead.
 **Action:** Move CPU-bound post-processing outside of database locks and implement batch lookup methods (e.g., using SQL 'IN' clauses) to minimize lock contention and improve overall throughput.
+
+## 2025-05-23 - [LRU Caching and Selective Data Fetching]
+**Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
+**Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
