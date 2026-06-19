@@ -342,9 +342,16 @@ class LANMessengerApp(ctk.CTk):
 
         if lines:
             self.audit_display.insert("end", "\n".join(lines) + "\n")
+        else:
+            self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+            self.audit_display.tag_config("center", justify='center')
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("end")
+
+        # Visual feedback
+        self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        self.after(2000, lambda: self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5")))
 
     def update_username(self, event=None):
         new_name = self.username_entry.get().strip()
@@ -558,7 +565,7 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
-    def get_ttl_seconds(self, var=None):
+    def _get_ttl_seconds(self, var=None):
         val = var.get() if var else self.ttl_var.get()
         if val == "1m": return 60
         if val == "10m": return 600
@@ -569,7 +576,7 @@ class LANMessengerApp(ctk.CTk):
     def send_message(self, event=None):
         msg = self.msg_entry.get()
         if not msg: return
-        ttl = self.get_ttl_seconds()
+        ttl = self._get_ttl_seconds()
 
         expires_at = (time.time() + ttl) if ttl else None
 
@@ -633,7 +640,7 @@ class LANMessengerApp(ctk.CTk):
                 if not m: return
 
                 # Get TTL
-                ttl_sec = self.get_ttl_seconds(var=tvar)
+                ttl_sec = self._get_ttl_seconds(var=tvar)
 
                 exp_at = (time.time() + ttl_sec) if ttl_sec else None
 
@@ -735,11 +742,15 @@ class LANMessengerApp(ctk.CTk):
             size = os.path.getsize(path)
             checksum = FileTransferManager.calculate_sha256(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self._get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(filename, path, size, local_ip, is_folder=False, checksum=checksum, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
+
+            # Visual feedback
+            self.share_btn.configure(text="Shared!", fg_color="#2ecc71")
+            self.after(2000, lambda: self.share_btn.configure(text="Share File", fg_color=("#3B8ED0", "#1F6AA5")))
 
     def get_folder_size(self, path):
         total_size = 0
@@ -756,11 +767,15 @@ class LANMessengerApp(ctk.CTk):
             dirname = os.path.basename(path)
             size = self.get_folder_size(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self._get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(dirname, path, size, local_ip, is_folder=True, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
+
+            # Visual feedback
+            self.share_folder_btn.configure(text="Shared!", fg_color="#2ecc71")
+            self.after(2000, lambda: self.share_folder_btn.configure(text="Share Folder", fg_color=("#3B8ED0", "#1F6AA5")))
 
     def show_my_files(self):
         self.current_file_view_source = "Local"
