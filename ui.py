@@ -17,6 +17,52 @@ from config import load_settings, save_settings
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
+class PeerSecurityDialog(ctk.CTkToplevel):
+    def __init__(self, parent, ip, name, db, logger, on_update):
+        super().__init__(parent)
+        self.title(f"Security: {name}")
+        self.geometry("350x380")
+        self.ip = ip
+        self.name = name
+        self.db = db
+        self.logger = logger
+        self.on_update = on_update
+
+        self.perms = self.db.get_peer_permissions(ip)
+
+        ctk.CTkLabel(self, text=f"Manage Peer: {name}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self, text=f"IP: {ip}", font=ctk.CTkFont(size=12)).pack(pady=(0, 10))
+
+        self.block_var = ctk.BooleanVar(value=self.perms.get('is_blocked', False))
+        self.chat_var = ctk.BooleanVar(value=self.perms.get('can_chat', True))
+        self.list_var = ctk.BooleanVar(value=self.perms.get('can_list_files', True))
+        self.down_var = ctk.BooleanVar(value=self.perms.get('can_download_files', True))
+
+        ctk.CTkSwitch(self, text="Block Peer", variable=self.block_var, progress_color="red").pack(pady=10, padx=20, anchor="w")
+
+        ctk.CTkLabel(self, text="Permissions:", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 5), padx=20, anchor="w")
+        ctk.CTkCheckBox(self, text="Can Chat", variable=self.chat_var).pack(pady=5, padx=40, anchor="w")
+        ctk.CTkCheckBox(self, text="Can List Files", variable=self.list_var).pack(pady=5, padx=40, anchor="w")
+        ctk.CTkCheckBox(self, text="Can Download Files", variable=self.down_var).pack(pady=5, padx=40, anchor="w")
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=20, fill="x", padx=20)
+
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.destroy).pack(side="left")
+        ctk.CTkButton(btn_frame, text="Save", width=100, command=self.save).pack(side="right")
+
+    def save(self):
+        new_perms = {
+            'is_blocked': self.block_var.get(),
+            'can_chat': self.chat_var.get(),
+            'can_list_files': self.list_var.get(),
+            'can_download_files': self.down_var.get()
+        }
+        self.db.update_peer_permissions(self.ip, new_perms)
+        self.logger.log("SECURITY_POLICY_CHANGE", f"Permissions updated for {self.name} ({self.ip}): {new_perms}")
+        self.on_update()
+        self.destroy()
+
 class LANMessengerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -213,7 +259,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.chat_display.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
+        self.chat_display.tag_config("search_info", foreground="#3B8ED0")
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -388,14 +434,20 @@ class LANMessengerApp(ctk.CTk):
             self.peer_trust[ip] = 'trusted'
             self.refresh_peers()
 
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, ip, name, self.db, self.logger, self.refresh_peers)
+
     def refresh_peers(self):
         # Update peer trust levels from DB in batch
         trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
         for ip in self.peers:
             self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
 
+        # Also include blocked status in snapshot for UI refreshes
+        peer_perms = {ip: self.db.get_peer_permissions(ip).get('is_blocked') for ip in self.peers}
+
         # Prevent unnecessary UI rebuilds using snapshot comparison
-        current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust}, sort_keys=True)
+        current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust, "perms": peer_perms}, sort_keys=True)
         if current_snapshot == self._last_peers_snapshot:
             self.after(2000, self.refresh_peers)
             return
@@ -410,17 +462,33 @@ class LANMessengerApp(ctk.CTk):
             lbl.pack(pady=20)
 
         for ip, name in self.peers.items():
-            row = ctk.CTkFrame(self.peers_scroll)
+            perms = self.db.get_peer_permissions(ip)
+            is_blocked = perms.get('is_blocked', False)
+
+            row = ctk.CTkFrame(self.peers_scroll, fg_color="#333333" if is_blocked else None)
             row.pack(fill="x", pady=2)
-            lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
+
+            label_color = "gray" if is_blocked else None
+            label_text = f"{name}\n{ip}"
+            if is_blocked:
+                label_text += " (BLOCKED)"
+
+            lbl = ctk.CTkLabel(row, text=label_text, font=("Arial", 10), text_color=label_color)
             lbl.pack(side="left", padx=5)
 
+            # Security button
+            btn_sec = ctk.CTkButton(row, text="Sec", width=35, height=20, fg_color="#555555",
+                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+            btn_sec.pack(side="right", padx=2)
+
             btn_browse = ctk.CTkButton(row, text="Browse", width=60, height=20,
-                              command=lambda i=ip, n=name: self.browse_peer_files(i, n))
+                              command=lambda i=ip, n=name: self.browse_peer_files(i, n),
+                              state="disabled" if is_blocked else "normal")
             btn_browse.pack(side="right", padx=5)
 
             btn_chat = ctk.CTkButton(row, text="Chat", width=60, height=20,
-                              command=lambda i=ip, n=name: self.open_private_chat(i, n))
+                              command=lambda i=ip, n=name: self.open_private_chat(i, n),
+                              state="disabled" if is_blocked else "normal")
             btn_chat.pack(side="right", padx=2)
 
             # Trust indicator
