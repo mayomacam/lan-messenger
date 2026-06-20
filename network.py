@@ -169,6 +169,17 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+
+                # Fast check for blocked peers before even doing TLS
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    logger = audit.get_logger()
+                    msg = f"Connection from {addr[0]} rejected: Peer is blocked (pre-TLS)."
+                    print(f"[DEBUG] {msg}")
+                    if logger: logger.log("SECURITY_ALERT", msg)
+                    client.close()
+                    continue
+
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
 
@@ -263,6 +274,16 @@ class NetworkManager:
         logger = audit.get_logger()
         try:
             client.settimeout(10)
+
+            # Granular permissions check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                msg = f"Connection from {addr[0]} rejected: Peer is blocked."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                self._send_json(client, {'status': 'ERR', 'msg': 'Access denied (blocked)'})
+                return
+
             # IP whitelist enforcement
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 msg = f"Connection from {addr[0]} rejected: IP not allowed."
@@ -302,6 +323,9 @@ class NetworkManager:
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
 
             elif msg_type == 'MSG':
+                if not perms.get('can_chat', True):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked chat message from {addr[0]}: Chatting disabled for this peer.")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -314,6 +338,9 @@ class NetworkManager:
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
             elif msg_type == 'MSG_PRIV':
+                if not perms.get('can_chat', True):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked private chat message from {addr[0]}: Chatting disabled for this peer.")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')

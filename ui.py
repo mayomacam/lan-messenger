@@ -17,6 +17,56 @@ from config import load_settings, save_settings
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
+class PeerSecurityDialog(ctk.CTkToplevel):
+    def __init__(self, parent, db, ip, name, on_update):
+        super().__init__(parent)
+        self.title(f"Security: {name}")
+        self.geometry("350x350")
+        self.db = db
+        self.ip = ip
+        self.name = name
+        self.on_update = on_update
+        self.logger = audit.get_logger()
+
+        self.transient(parent)
+        self.grab_set()
+
+        perms = self.db.get_peer_permissions(ip)
+
+        ctk.CTkLabel(self, text=f"Permissions for {name}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(self, text=f"IP: {ip}", font=ctk.CTkFont(size=12)).pack(pady=(0, 10))
+
+        self.chat_var = ctk.BooleanVar(value=perms.get('can_chat', True))
+        ctk.CTkCheckBox(self, text="Can Chat", variable=self.chat_var).pack(pady=5, padx=20, anchor="w")
+
+        self.list_var = ctk.BooleanVar(value=perms.get('can_list_files', True))
+        ctk.CTkCheckBox(self, text="Can List Files", variable=self.list_var).pack(pady=5, padx=20, anchor="w")
+
+        self.download_var = ctk.BooleanVar(value=perms.get('can_download_files', True))
+        ctk.CTkCheckBox(self, text="Can Download Files", variable=self.download_var).pack(pady=5, padx=20, anchor="w")
+
+        self.block_var = ctk.BooleanVar(value=perms.get('is_blocked', False))
+        ctk.CTkCheckBox(self, text="BLOCK PEER", variable=self.block_var, text_color="red").pack(pady=10, padx=20, anchor="w")
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=20, fill="x")
+
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.destroy).pack(side="left", padx=20)
+        ctk.CTkButton(btn_frame, text="Save", width=100, command=self.save).pack(side="right", padx=20)
+
+    def save(self):
+        new_perms = {
+            'can_chat': self.chat_var.get(),
+            'can_list_files': self.list_var.get(),
+            'can_download_files': self.download_var.get(),
+            'is_blocked': self.block_var.get()
+        }
+        self.db.update_peer_permissions(self.ip, new_perms)
+        if self.logger:
+            self.logger.log("SECURITY_POLICY_CHANGE", f"Permissions updated for {self.name} ({self.ip}): {new_perms}")
+        self.on_update()
+        self.destroy()
+
 class LANMessengerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -423,6 +473,10 @@ class LANMessengerApp(ctk.CTk):
                               command=lambda i=ip, n=name: self.open_private_chat(i, n))
             btn_chat.pack(side="right", padx=2)
 
+            btn_sec = ctk.CTkButton(row, text="Sec", width=40, height=20, fg_color="#e67e22",
+                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+            btn_sec.pack(side="right", padx=2)
+
             # Trust indicator
             trust = self.peer_trust.get(ip, 'untrusted')
             color = "gray"
@@ -565,6 +619,9 @@ class LANMessengerApp(ctk.CTk):
         if val == "1h": return 3600
         if val == "1d": return 86400
         return None
+
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, self.db, ip, name, self.refresh_peers)
 
     def send_message(self, event=None):
         msg = self.msg_entry.get()

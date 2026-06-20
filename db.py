@@ -152,6 +152,16 @@ class Database:
                 if 'trust_level' not in [info[1] for info in cursor.execute("PRAGMA table_info(trusted_peers)").fetchall()]:
                     cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
 
+            # Granular permissions migration
+            if 'can_chat' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_chat BOOLEAN DEFAULT 1")
+            if 'can_list_files' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_list_files BOOLEAN DEFAULT 1")
+            if 'can_download_files' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files BOOLEAN DEFAULT 1")
+            if 'is_blocked' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked BOOLEAN DEFAULT 0")
+
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -285,15 +295,47 @@ class Database:
         now = time.time()
         with self.lock:
             with self.conn:
+                # Use COALESCE to preserve existing permissions if we're just updating the name/fingerprint
                 self.conn.execute("""
-                    INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked)
+                    VALUES (?, ?, ?, ?, ?, 1, 1, 1, 0)
                     ON CONFLICT(ip) DO UPDATE SET
                         username=excluded.username,
                         fingerprint=excluded.fingerprint,
                         trust_level=excluded.trust_level,
                         last_seen=excluded.last_seen
                 """, (ip, username, fingerprint, trust_level, now))
+
+    def get_peer_permissions(self, ip: str) -> dict:
+        """Returns a dictionary of peer permissions."""
+        with self.lock:
+            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'can_chat': bool(row[0]),
+                    'can_list_files': bool(row[1]),
+                    'can_download_files': bool(row[2]),
+                    'is_blocked': bool(row[3])
+                }
+            # Default for unknown peers
+            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
+
+    def update_peer_permissions(self, ip: str, permissions_dict: dict):
+        """Update granular permissions for a peer."""
+        with self.lock:
+            with self.conn:
+                self.conn.execute("""
+                    UPDATE trusted_peers
+                    SET can_chat = ?, can_list_files = ?, can_download_files = ?, is_blocked = ?
+                    WHERE ip = ?
+                """, (
+                    int(permissions_dict.get('can_chat', True)),
+                    int(permissions_dict.get('can_list_files', True)),
+                    int(permissions_dict.get('can_download_files', True)),
+                    int(permissions_dict.get('is_blocked', False)),
+                    ip
+                ))
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
@@ -319,9 +361,12 @@ class Database:
     def add_audit_log(self, event_type: str, details: str):
         timestamp = time.time()
         with self.lock:
-            with self.conn:
-                self.conn.execute("INSERT INTO audit_logs (event_type, details, timestamp) VALUES (?, ?, ?)",
-                                 (event_type, details, timestamp))
+            try:
+                with self.conn:
+                    self.conn.execute("INSERT INTO audit_logs (event_type, details, timestamp) VALUES (?, ?, ?)",
+                                     (event_type, details, timestamp))
+            except Exception as e:
+                print(f"[DEBUG] Failed to add audit log to DB: {e}")
 
     def get_audit_logs(self, limit=100) -> List[Tuple]:
         with self.lock:
