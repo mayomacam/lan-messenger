@@ -74,7 +74,6 @@ class LANMessengerApp(ctk.CTk):
         self.private_entries = {} # ip -> CTkEntry
         self._private_chat_after_ids = {} # ip -> after_id
         self._last_peers_snapshot = ""
-        self._search_timer = None
         self._last_search_query = ""
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
@@ -89,25 +88,34 @@ class LANMessengerApp(ctk.CTk):
 
         # Periodic Updates
         self.after(2000, self.refresh_peers)
-        self.after(10000, self.reap_messages)
-        self.load_chat_history()
+        self.load_chat_history(debounce=False)
         self.after(100, lambda: self.msg_entry.focus_set())
 
         # Start Message Reaper
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
         self.reaper_thread.start()
 
+    def _refresh_after_reap(self, msg_count):
+        """Thread-safe UI refresh after background reaping."""
+        if msg_count > 0:
+            self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
+            # Only refresh visible chat tabs to save resources
+            current_tab = self.tabview.get()
+            if current_tab == "Global Chat":
+                self.load_chat_history(debounce=True)
+            elif current_tab.startswith("Chat: "):
+                if self.current_private_peer:
+                    self.load_private_chat(self.current_private_peer)
+
     def message_reaper_loop(self):
+        """Background thread for periodic database maintenance (runs every 15s)."""
         while True:
             try:
                 # Reap messages
                 msg_count = self.db.reap_expired_messages()
                 if msg_count > 0:
-                    self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
-                    self.after(0, self.load_chat_history)
-                    # Also reload private chat if open
-                    if self.current_private_peer:
-                        self.after(0, lambda p=self.current_private_peer: self.load_private_chat(p))
+                    # Schedule UI update on main thread
+                    self.after(0, lambda: self._refresh_after_reap(msg_count))
 
                 # Reap files
                 file_count = self.db.delete_expired_files()
@@ -117,7 +125,7 @@ class LANMessengerApp(ctk.CTk):
                         self.after(0, self.refresh_files_view)
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
-            time.sleep(60)
+            time.sleep(15)
 
     def prompt_username(self):
         dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
@@ -151,7 +159,7 @@ class LANMessengerApp(ctk.CTk):
             if is_new_peer:
                 self.executor.submit(self.network.send_hello, ip, self.username)
         elif event_type == 'MSG':
-             self.load_chat_history()
+             self.load_chat_history(debounce=True)
         elif event_type == 'MSG_PRIV':
              # args: (msg_id, sender, content, peer_ip)
              peer_ip = args[3]
@@ -161,7 +169,7 @@ class LANMessengerApp(ctk.CTk):
                  sender_name = self.peers.get(peer_ip, args[1])
                  self.open_private_chat(peer_ip, sender_name)
         elif event_type in ['EDIT', 'DELETE']:
-             self.load_chat_history()
+             self.load_chat_history(debounce=True)
         elif event_type == 'SECURITY_ALERT':
              msg = args[0]
              messagebox.showwarning("Security Alert", msg)
@@ -365,22 +373,6 @@ class LANMessengerApp(ctk.CTk):
             self.change_name_btn.configure(text="Saved", fg_color="#2ecc71")
             self.after(2000, lambda: self.change_name_btn.configure(text="Set", fg_color=("#3B8ED0", "#1F6AA5")))
 
-    def reap_messages(self):
-        """Periodically remove expired messages from the database and refresh UI."""
-        deleted_count = self.db.delete_expired_messages()
-        if deleted_count == 0:
-            self.after(10000, self.reap_messages)
-            return
-
-        # Only refresh if we are on a chat tab
-        current_tab = self.tabview.get()
-        if current_tab == "Global Chat":
-            self.load_chat_history()
-        elif current_tab.startswith("Chat: "):
-            if self.current_private_peer:
-                self.load_private_chat(self.current_private_peer)
-
-        self.after(10000, self.reap_messages) # Run every 10s
 
     def show_trust_warning(self, ip):
         if messagebox.askyesno("Security Warning", f"Fingerprint mismatch detected for {ip}!\nThis could be a Man-in-the-Middle attack or the user reinstalled the app.\n\nDo you want to trust this new identity?"):
@@ -502,25 +494,34 @@ class LANMessengerApp(ctk.CTk):
 
     def on_search_key(self, event):
         # Throttle live search
-        if self._search_after_id:
-            self.after_cancel(self._search_after_id)
-        self._search_after_id = self.after(300, self.load_chat_history)
+        self.load_chat_history(debounce=True, ms=300)
 
     def clear_search(self):
         if self._search_after_id:
-            self.after_cancel(self._search_after_id)
-            self._search_after_id = None
-        self.search_entry.delete(0, "end")
-        self.load_chat_history()
-        self.search_entry.focus_set()
-
-    def load_chat_history(self):
-        if self._search_timer:
             try:
-                self.after_cancel(self._search_timer)
+                self.after_cancel(self._search_after_id)
             except Exception:
                 pass
-            self._search_timer = None
+            self._search_after_id = None
+        self.search_entry.delete(0, "end")
+        self.load_chat_history(debounce=False)
+        self.search_entry.focus_set()
+
+    def load_chat_history(self, debounce=False, ms=100):
+        """Debounced chat history refresh to prevent UI thrashing."""
+        if not self.winfo_exists():
+            return
+
+        if debounce:
+            if self._search_after_id:
+                try:
+                    self.after_cancel(self._search_after_id)
+                except Exception:
+                    pass
+            self._search_after_id = self.after(ms, lambda: self.load_chat_history(debounce=False))
+            return
+
+        self._search_after_id = None
         self._last_search_query = self.search_entry.get().strip().lower()
 
         query = self.search_entry.get().strip().lower()
