@@ -213,7 +213,8 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.chat_display.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
+        self.chat_display._textbox.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
+        self.chat_display._textbox.tag_config("center", justify='center')
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -322,26 +323,50 @@ class LANMessengerApp(ctk.CTk):
 
         self.audit_display = ctk.CTkTextbox(self.audit_tab, state="disabled")
         self.audit_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self.audit_display._textbox.tag_config("alert", foreground="#e74c3c", font=ctk.CTkFont(weight="bold"))
+        self.audit_display._textbox.tag_config("warning", foreground="#e67e22", font=ctk.CTkFont(weight="bold"))
+        self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
+        self.audit_display._textbox.tag_config("center", justify='center')
 
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
         self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
 
-        self.refresh_audit_btn = ctk.CTkButton(self.audit_controls, text="Refresh Logs", command=self.load_audit_logs)
+        self.refresh_audit_btn = ctk.CTkButton(self.audit_controls, text="Refresh Logs", command=self.refresh_audit_view)
         self.refresh_audit_btn.pack(pady=5)
+
+    def refresh_audit_view(self):
+        """Refreshes audit logs with non-blocking success feedback."""
+        self.load_audit_logs()
+        self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        def reset():
+            if self.refresh_audit_btn.winfo_exists():
+                self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(2000, reset)
 
     def load_audit_logs(self):
         logs = self.db.get_audit_logs(200)
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
-        lines = []
-        for log in logs:
-            # log: (id, event_type, details, timestamp)
-            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            lines.append(f"[{ts}] {log[1]}: {log[2]}")
+        if not logs:
+            self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+        else:
+            for log in logs:
+                # log: (id, event_type, details, timestamp)
+                event_type = log[1]
+                details = log[2]
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
 
-        if lines:
-            self.audit_display.insert("end", "\n".join(lines) + "\n")
+                tag = None
+                if event_type in ("SECURITY_ALERT", "FILE_INTEGRITY_FAILURE"):
+                    tag = "alert"
+                elif event_type == "AUTH_FAILURE":
+                    tag = "warning"
+                elif event_type in ("FILE_TRANSFER", "FILE_INTEGRITY_SUCCESS", "CONNECTION"):
+                    tag = "info"
+
+                line = f"[{ts}] {event_type}: {details}\n"
+                self.audit_display.insert("end", line, tag)
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("end")
@@ -471,6 +496,7 @@ class LANMessengerApp(ctk.CTk):
                 threading.Thread(target=self.try_manual_connect, args=(ip, dialog, connect_btn), daemon=True).start()
 
         entry.bind("<Return>", connect)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         connect_btn = ctk.CTkButton(dialog, text="Connect", command=connect)
         connect_btn.pack(pady=20)
         self.after(200, lambda: entry.focus_set() if entry.winfo_exists() else None)
@@ -550,10 +576,8 @@ class LANMessengerApp(ctk.CTk):
             self.chat_display.insert("end", "\n".join(lines) + "\n")
         elif query:
             self.chat_display.insert("end", f"\n\nNo messages found matching '{query}'", "center")
-            self.chat_display.tag_config("center", justify='center')
         elif not messages:
             self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
-            self.chat_display._textbox.tag_config("center", justify='center')
 
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
@@ -956,6 +980,7 @@ class LANMessengerApp(ctk.CTk):
 
         entry_chat.bind("<Return>", save)
         entry_file.bind("<Return>", save)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         save_btn = ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green")
         save_btn.pack(pady=20)
         self.after(200, lambda: entry_chat.focus_set())
