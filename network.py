@@ -8,7 +8,7 @@ import os
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ssl_utils import wrap_socket, get_cert_fingerprint
+from ssl_utils import wrap_socket, get_cert_fingerprint, get_peer_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
@@ -169,6 +169,14 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+
+                # Pre-TLS check: Drop connection immediately if peer is blocked
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    print(f"[DEBUG] Blocking connection from {addr[0]} (is_blocked=1)")
+                    client.close()
+                    continue
+
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
 
@@ -294,6 +302,18 @@ class NetworkManager:
             msg_type = data.get('type')
             if not isinstance(msg_type, str):
                 return
+
+            # Granular permission check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                return # Already handled at accept but defense in depth
+
+            if msg_type in ('MSG', 'MSG_PRIV', 'MSG_EDIT', 'MSG_DEL'):
+                if not perms.get('can_chat'):
+                    msg = f"Unauthorized chat request from {addr[0]} (can_chat=0)"
+                    print(f"[DEBUG] {msg}")
+                    if logger: logger.log("SECURITY_ALERT", msg)
+                    return
 
             if msg_type == 'HELLO':
                 sender_username = data.get('username')
