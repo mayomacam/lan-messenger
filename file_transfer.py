@@ -56,6 +56,13 @@ class FileTransferManager:
         while self.running:
             try:
                 client, addr = self.server_socket.accept()
+
+                # Proactive security: drop blocked IPs before TLS handshake
+                if self.db.is_peer_blocked(addr[0]):
+                    print(f"[SECURITY] DROPPING file connection from blocked peer: {addr[0]}")
+                    client.close()
+                    continue
+
                 # Wrap the raw socket with TLS before handing to handler
                 client = wrap_socket(client, server_side=True)
 
@@ -93,6 +100,13 @@ class FileTransferManager:
         logger = audit.get_logger()
         try:
             client.settimeout(10)
+
+            # Security: Get peer permissions
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                 if logger: logger.log("SECURITY_ALERT", f"Dropped file request from blocked peer {addr[0]}")
+                 return
+
             # IP whitelist check
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: IP not allowed.")
@@ -124,6 +138,10 @@ class FileTransferManager:
             if not isinstance(cmd, str): return
 
             if cmd == 'PUSH_FILE':
+                if not perms.get('can_download_files'): # They are "pushing" but we consider it file activity
+                     if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized PUSH_FILE from {addr[0]}")
+                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                     return
                 filename = req.get('filename')
                 size = req.get('size')
                 if not isinstance(filename, str) or not isinstance(size, int): return
@@ -134,6 +152,11 @@ class FileTransferManager:
                 self.receive_stream(client, filename, size)
 
             elif cmd == 'PULL_FILE':
+                if not perms.get('can_download_files'):
+                     if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized PULL_FILE from {addr[0]}")
+                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                     return
+
                 path = req.get('path')
                 if not isinstance(path, str):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed PULL_FILE request from {addr[0]}: path must be a string.")
@@ -168,6 +191,10 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found or expired'}).encode())
 
             elif cmd == 'LIST_SHARED':
+                if not perms.get('can_list_files'):
+                     if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized LIST_SHARED from {addr[0]}")
+                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                     return
                 files = self.db.get_files()
                 file_list = []
                 for f in files:
@@ -186,11 +213,23 @@ class FileTransferManager:
                 client.sendall(data_encoded)
 
             elif cmd == 'LIST_FOLDER':
+                if not perms.get('can_list_files'):
+                     if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized LIST_FOLDER from {addr[0]}")
+                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                     return
+
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 path_str = req.get('path')
                 if not isinstance(path_str, str):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed LIST_FOLDER request from {addr[0]}: path must be a string.")
                     return
+
+                # Security: Check if folder is actually shared
+                if not self.db.is_file_shared(path_str):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized LIST_FOLDER request from {addr[0]}: {path_str}")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
+
                 base_path = Path(path_str)
                 if base_path.exists() and base_path.is_dir():
                     entries = []

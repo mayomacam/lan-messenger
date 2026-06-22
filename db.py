@@ -122,7 +122,7 @@ class Database:
             if 'expires_at' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN expires_at REAL")
 
-            # Trusted Peers table: ip, username, fingerprint, trust_level, last_seen
+            # Trusted Peers table: ip, username, fingerprint, trust_level, permissions, last_seen
             # New installations use this schema
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trusted_peers (
@@ -130,27 +130,28 @@ class Database:
                     username TEXT,
                     fingerprint TEXT,
                     trust_level TEXT DEFAULT 'untrusted',
+                    can_chat BOOLEAN DEFAULT 1,
+                    can_list_files BOOLEAN DEFAULT 1,
+                    can_download_files BOOLEAN DEFAULT 1,
+                    is_blocked BOOLEAN DEFAULT 0,
                     last_seen REAL
                 )
             """)
-            # Migration for existing installations with old 3-column schema (ip, fingerprint, last_seen)
+            # Migration for existing installations
             cursor.execute("PRAGMA table_info(trusted_peers)")
             tp_columns = [info[1] for info in cursor.fetchall()]
             if 'username' not in tp_columns:
-                # SQLite doesn't allow adding columns in the middle.
-                # To maintain (ip, username, fingerprint, trust_level, last_seen) order:
-                if len(tp_columns) == 3 and tp_columns[1] == 'fingerprint':
-                    # This is the old schema. We need to rename and recreate or just append.
-                    # Appending is safer than re-creating for P2P.
-                    # But the code expects a certain order.
-                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
-                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
-                    # Now it has (ip, fingerprint, last_seen, username, trust_level)
-                else:
-                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
             if 'trust_level' not in tp_columns:
-                if 'trust_level' not in [info[1] for info in cursor.execute("PRAGMA table_info(trusted_peers)").fetchall()]:
-                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
+            if 'can_chat' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_chat BOOLEAN DEFAULT 1")
+            if 'can_list_files' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_list_files BOOLEAN DEFAULT 1")
+            if 'can_download_files' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files BOOLEAN DEFAULT 1")
+            if 'is_blocked' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked BOOLEAN DEFAULT 0")
 
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
@@ -251,18 +252,28 @@ class Database:
         return decrypted_rows
 
     def is_file_shared(self, path: str) -> bool:
-        """Check if a file path is currently shared and not expired."""
+        """Check if a file path is currently shared and not expired.
+        Supports checking if a file is within a shared folder.
+        """
         now = time.time()
         with self.lock:
-            # Fetch only the path column to reduce data transfer and decryption overhead
-            cursor = self.conn.execute("SELECT path FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
+            cursor = self.conn.execute("SELECT path, is_folder FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
             rows = cursor.fetchall()
 
-        # Check outside the lock; early exit when match is found
+        # Check outside the lock
+        norm_path = os.path.normpath(path)
         for row in rows:
-            decrypted_path = self.cipher.decrypt(row[0])
-            if decrypted_path == path:
-                return True
+            decrypted_shared_path = self.cipher.decrypt(row[0])
+            is_folder = row[1]
+            norm_shared = os.path.normpath(decrypted_shared_path)
+
+            if is_folder:
+                # Check if path is inside this folder
+                if norm_path == norm_shared or norm_path.startswith(norm_shared + os.sep):
+                    return True
+            else:
+                if norm_path == norm_shared:
+                    return True
         return False
 
     def delete_expired_files(self) -> int:
@@ -281,24 +292,34 @@ class Database:
                 cursor = self.conn.execute("DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
                 return cursor.rowcount
 
-    def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = 'untrusted'):
+    def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = None):
         now = time.time()
         with self.lock:
             with self.conn:
-                self.conn.execute("""
-                    INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(ip) DO UPDATE SET
-                        username=excluded.username,
-                        fingerprint=excluded.fingerprint,
-                        trust_level=excluded.trust_level,
-                        last_seen=excluded.last_seen
-                """, (ip, username, fingerprint, trust_level, now))
+                # First, see if peer exists to preserve permissions
+                cursor = self.conn.execute("SELECT trust_level, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+                existing = cursor.fetchone()
+
+                if existing:
+                    # Update while preserving existing permissions/trust if not provided
+                    new_trust = trust_level if trust_level else existing[0]
+                    self.conn.execute("""
+                        UPDATE trusted_peers SET
+                            username = ?, fingerprint = ?, trust_level = ?, last_seen = ?
+                        WHERE ip = ?
+                    """, (username, fingerprint, new_trust, now, ip))
+                else:
+                    # Insert new
+                    new_trust = trust_level if trust_level else 'untrusted'
+                    self.conn.execute("""
+                        INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (ip, username, fingerprint, new_trust, now))
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
             # Explicitly select columns to handle schema variations gracefully
-            cursor = self.conn.execute("SELECT ip, username, fingerprint, trust_level, last_seen FROM trusted_peers WHERE ip = ?", (ip,))
+            cursor = self.conn.execute("SELECT ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
             return cursor.fetchone()
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
@@ -315,6 +336,37 @@ class Database:
         with self.lock:
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
+
+    def get_peer_permissions(self, ip: str) -> dict:
+        with self.lock:
+            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'can_chat': bool(row[0]),
+                    'can_list_files': bool(row[1]),
+                    'can_download_files': bool(row[2]),
+                    'is_blocked': bool(row[3])
+                }
+            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
+
+    def update_peer_permissions(self, ip: str, perms: dict):
+        with self.lock:
+            with self.conn:
+                self.conn.execute("""
+                    UPDATE trusted_peers SET
+                        can_chat = ?, can_list_files = ?, can_download_files = ?, is_blocked = ?
+                    WHERE ip = ?
+                """, (int(perms.get('can_chat', True)),
+                      int(perms.get('can_list_files', True)),
+                      int(perms.get('can_download_files', True)),
+                      int(perms.get('is_blocked', False)), ip))
+
+    def is_peer_blocked(self, ip: str) -> bool:
+        with self.lock:
+            cursor = self.conn.execute("SELECT is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+            return bool(row[0]) if row else False
 
     def add_audit_log(self, event_type: str, details: str):
         timestamp = time.time()

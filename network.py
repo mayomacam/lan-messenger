@@ -169,6 +169,13 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+
+                # Proactive security: drop blocked IPs before TLS handshake
+                if self.db.is_peer_blocked(addr[0]):
+                    print(f"[SECURITY] DROPPING connection from blocked peer: {addr[0]}")
+                    client.close()
+                    continue
+
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
 
@@ -263,6 +270,13 @@ class NetworkManager:
         logger = audit.get_logger()
         try:
             client.settimeout(10)
+
+            # Double check blocking status just in case (e.g. if blocked while connected)
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                 if logger: logger.log("SECURITY_ALERT", f"Dropped packet from blocked peer {addr[0]}")
+                 return
+
             # IP whitelist enforcement
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 msg = f"Connection from {addr[0]} rejected: IP not allowed."
@@ -302,6 +316,9 @@ class NetworkManager:
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
 
             elif msg_type == 'MSG':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized MSG from {addr[0]}")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -314,6 +331,9 @@ class NetworkManager:
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
             elif msg_type == 'MSG_PRIV':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized MSG_PRIV from {addr[0]}")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -327,6 +347,9 @@ class NetworkManager:
                 if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])
 
             elif msg_type == 'MSG_EDIT':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized MSG_EDIT from {addr[0]}")
+                    return
                 msg_id = data.get('id')
                 new_content = data.get('content')
                 if not all(isinstance(x, str) for x in [msg_id, new_content]):
@@ -335,6 +358,9 @@ class NetworkManager:
                 if self.callback: self.callback('EDIT', msg_id, new_content)
 
             elif msg_type == 'MSG_DEL':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized MSG_DEL from {addr[0]}")
+                    return
                 msg_id = data.get('id')
                 if not isinstance(msg_id, str): return
                 self.db.delete_message(msg_id)
