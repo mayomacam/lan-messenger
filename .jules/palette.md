@@ -29,3 +29,7 @@
 ## 2026-06-18 - Keyboard accessibility for search components
 **Learning:** Adding the `Esc` key shortcut for clearing search bars is a standard UX pattern that improves keyboard accessibility and efficiency for power users, complementing visual clear buttons.
 **Action:** Always ensure interactive filtering or search components have consistent keyboard-driven reset mechanisms (like the Escape key).
+
+## 2026-06-20 - CustomTkinter Text Tagging Constraints
+**Learning:** In the CustomTkinter library, the CTkTextbox widget is a wrapper that does not expose the standard Tkinter 'tag_config' method directly. Attempting to call it on the CTkTextbox instance results in an AttributeError, rendering advanced text styling (like search highlights or alignment) non-functional.
+**Action:** Always use the internal '._textbox' attribute (e.g., self.widget._textbox.tag_config(...)) when performing text tagging operations in CustomTkinter to ensure styling is correctly applied to the underlying Tkinter text widget.

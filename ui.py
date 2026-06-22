@@ -92,6 +92,8 @@ class LANMessengerApp(ctk.CTk):
         self.after(10000, self.reap_messages)
         self.load_chat_history()
         self.after(100, lambda: self.msg_entry.focus_set())
+        self.bind("<Control-f>", self.focus_search)
+        self.bind("<Control-F>", self.focus_search)
 
         # Start Message Reaper
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
@@ -213,7 +215,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.chat_display.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
+        self.chat_display._textbox.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -473,6 +475,7 @@ class LANMessengerApp(ctk.CTk):
         entry.bind("<Return>", connect)
         connect_btn = ctk.CTkButton(dialog, text="Connect", command=connect)
         connect_btn.pack(pady=20)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         self.after(200, lambda: entry.focus_set() if entry.winfo_exists() else None)
 
     def try_manual_connect(self, ip, dialog, btn):
@@ -514,6 +517,10 @@ class LANMessengerApp(ctk.CTk):
         self.load_chat_history()
         self.search_entry.focus_set()
 
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+
     def load_chat_history(self):
         if self._search_timer:
             try:
@@ -550,7 +557,7 @@ class LANMessengerApp(ctk.CTk):
             self.chat_display.insert("end", "\n".join(lines) + "\n")
         elif query:
             self.chat_display.insert("end", f"\n\nNo messages found matching '{query}'", "center")
-            self.chat_display.tag_config("center", justify='center')
+            self.chat_display._textbox.tag_config("center", justify='center')
         elif not messages:
             self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
             self.chat_display._textbox.tag_config("center", justify='center')
@@ -735,7 +742,7 @@ class LANMessengerApp(ctk.CTk):
             size = os.path.getsize(path)
             checksum = FileTransferManager.calculate_sha256(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self.get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(filename, path, size, local_ip, is_folder=False, checksum=checksum, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
@@ -756,7 +763,7 @@ class LANMessengerApp(ctk.CTk):
             dirname = os.path.basename(path)
             size = self.get_folder_size(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self.get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(dirname, path, size, local_ip, is_folder=True, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
@@ -958,6 +965,7 @@ class LANMessengerApp(ctk.CTk):
         entry_file.bind("<Return>", save)
         save_btn = ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green")
         save_btn.pack(pady=20)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         self.after(200, lambda: entry_chat.focus_set())
 
     def on_closing(self):
