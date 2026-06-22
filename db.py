@@ -95,7 +95,6 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient_deleted_ts ON messages(recipient, is_deleted, timestamp)")
             # Index for expiring messages
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at)")
-
             # Drop old less efficient indexes
             cursor.execute("DROP INDEX IF EXISTS idx_messages_deleted_timestamp")
             cursor.execute("DROP INDEX IF EXISTS idx_messages_recipient")
@@ -121,6 +120,9 @@ class Database:
                 cursor.execute("ALTER TABLE files ADD COLUMN checksum TEXT")
             if 'expires_at' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN expires_at REAL")
+
+            # Index for expiring files
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at)")
 
             # Trusted Peers table: ip, username, fingerprint, trust_level, last_seen
             # New installations use this schema
@@ -161,6 +163,7 @@ class Database:
                     timestamp REAL NOT NULL
                 )
             """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)")
             self.conn.commit()
 
     def add_message(self, sender: str, content: str, recipient: str = None, ttl: int = None) -> str:

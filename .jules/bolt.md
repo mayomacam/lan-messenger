@@ -33,3 +33,7 @@
 ## 2025-05-23 - [LRU Caching and Selective Data Fetching]
 **Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
 **Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
+
+## 2025-05-24 - [Lazy UI Loading and Visibility Checks]
+**Learning:** Performing database queries and UI updates for invisible tabs is a massive waste of resources. By implementing visibility checks in data-loading methods and triggering them on tab change, main-thread responsiveness can be dramatically improved without losing data consistency.
+**Action:** Always check `self.tabview.get()` before performing expensive UI updates. Use `self.after(0, ...)` from background threads to schedule maintenance, and only refresh the UI if the relevant tab is currently visible.
