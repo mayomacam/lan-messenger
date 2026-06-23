@@ -322,6 +322,11 @@ class LANMessengerApp(ctk.CTk):
 
         self.audit_display = ctk.CTkTextbox(self.audit_tab, state="disabled")
         self.audit_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        # Configure semantic tags for audit logs
+        self.audit_display._textbox.tag_config("alert", foreground="#e74c3c")
+        self.audit_display._textbox.tag_config("warning", foreground="#e67e22")
+        self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
+        self.audit_display._textbox.tag_config("center", justify='center')
 
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
         self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -330,21 +335,36 @@ class LANMessengerApp(ctk.CTk):
         self.refresh_audit_btn.pack(pady=5)
 
     def load_audit_logs(self):
+        # Non-blocking success feedback
+        self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        def reset():
+            if self.refresh_audit_btn.winfo_exists():
+                self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(1500, reset)
+
         logs = self.db.get_audit_logs(200)
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
-        lines = []
-        for log in logs:
-            # log: (id, event_type, details, timestamp)
-            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            lines.append(f"[{ts}] {log[1]}: {log[2]}")
+        if not logs:
+            self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+        else:
+            for log in logs:
+                # log: (id, event_type, details, timestamp)
+                event_type = log[1]
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+                line = f"[{ts}] {event_type}: {log[2]}\n"
 
-        if lines:
-            self.audit_display.insert("end", "\n".join(lines) + "\n")
+                tag = "info"
+                if event_type in ["SECURITY_ALERT", "FILE_INTEGRITY_FAILURE"]:
+                    tag = "alert"
+                elif event_type == "AUTH_FAILURE":
+                    tag = "warning"
+
+                self.audit_display.insert("end", line, tag)
 
         self.audit_display.configure(state="disabled")
-        self.audit_display.see("end")
+        self.audit_display.see("1.0")
 
     def update_username(self, event=None):
         new_name = self.username_entry.get().strip()
@@ -571,21 +591,19 @@ class LANMessengerApp(ctk.CTk):
         if not msg: return
         ttl = self.get_ttl_seconds()
 
-        expires_at = (time.time() + ttl) if ttl else None
-
         # If we are in a private chat tab, send private message
         current_tab = self.tabview.get()
         if current_tab.startswith("Chat: "):
             peer_ip = self.current_private_peer
             if peer_ip:
-                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, expires_at=expires_at)
+                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, ttl=ttl)
                 threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True, ttl)).start()
                 self.msg_entry.delete(0, "end")
                 self.load_private_chat(peer_ip)
                 return
 
         # Otherwise send global message
-        msg_id = self.db.add_message(self.username, msg, expires_at=expires_at)
+        msg_id = self.db.add_message(self.username, msg, ttl=ttl)
         for ip in self.peers:
             self.executor.submit(self.network.send_message, ip, self.username, msg, msg_id, False, ttl)
 
@@ -635,9 +653,7 @@ class LANMessengerApp(ctk.CTk):
                 # Get TTL
                 ttl_sec = self.get_ttl_seconds(var=tvar)
 
-                exp_at = (time.time() + ttl_sec) if ttl_sec else None
-
-                mid = self.db.add_message(self.username, m, recipient=i, expires_at=exp_at)
+                mid = self.db.add_message(self.username, m, recipient=i, ttl=ttl_sec)
                 threading.Thread(target=self.network.send_message, args=(i, self.username, m, mid, True, ttl_sec)).start()
                 ent.delete(0, "end")
                 self.load_private_chat(i)
@@ -735,7 +751,7 @@ class LANMessengerApp(ctk.CTk):
             size = os.path.getsize(path)
             checksum = FileTransferManager.calculate_sha256(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self.get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(filename, path, size, local_ip, is_folder=False, checksum=checksum, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
@@ -756,7 +772,7 @@ class LANMessengerApp(ctk.CTk):
             dirname = os.path.basename(path)
             size = self.get_folder_size(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self.get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(dirname, path, size, local_ip, is_folder=True, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
