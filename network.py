@@ -169,6 +169,15 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+
+                # PRE-TLS check for blocked peers to save resources
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    logger = audit.get_logger()
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked peer {addr[0]} tried to connect (TCP).")
+                    client.close()
+                    continue
+
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
 
@@ -290,10 +299,23 @@ class NetworkManager:
                     self._send_json(client, {'status': 'ERR', 'msg': 'Authentication failed'})
                     return
 
+            # Granular permission check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                self._send_json(client, {'status': 'ERR', 'msg': 'Access denied: blocked'})
+                return
+
             # Existing message handling with validation
             msg_type = data.get('type')
             if not isinstance(msg_type, str):
                 return
+
+            # Chat permission check
+            if msg_type in ['MSG', 'MSG_PRIV', 'MSG_EDIT', 'MSG_DEL']:
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} attempted to send message without permission.")
+                    self._send_json(client, {'status': 'ERR', 'msg': 'Chat permission denied'})
+                    return
 
             if msg_type == 'HELLO':
                 sender_username = data.get('username')

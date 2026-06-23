@@ -152,6 +152,17 @@ class Database:
                 if 'trust_level' not in [info[1] for info in cursor.execute("PRAGMA table_info(trusted_peers)").fetchall()]:
                     cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
 
+            # Migration for granular permissions
+            updated_tp_columns = [info[1] for info in cursor.execute("PRAGMA table_info(trusted_peers)").fetchall()]
+            if 'can_chat' not in updated_tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_chat INTEGER DEFAULT 1")
+            if 'can_list_files' not in updated_tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_list_files INTEGER DEFAULT 1")
+            if 'can_download_files' not in updated_tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files INTEGER DEFAULT 1")
+            if 'is_blocked' not in updated_tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked INTEGER DEFAULT 0")
+
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -254,15 +265,24 @@ class Database:
         """Check if a file path is currently shared and not expired."""
         now = time.time()
         with self.lock:
-            # Fetch only the path column to reduce data transfer and decryption overhead
-            cursor = self.conn.execute("SELECT path FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
+            # Fetch path and is_folder to handle folder content authorization
+            cursor = self.conn.execute("SELECT path, is_folder FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
             rows = cursor.fetchall()
 
         # Check outside the lock; early exit when match is found
         for row in rows:
             decrypted_path = self.cipher.decrypt(row[0])
+            is_folder = row[1]
             if decrypted_path == path:
                 return True
+            if is_folder:
+                # Support prefix matching for folder contents
+                try:
+                    # Ensure path is within the shared folder and not a partial match of folder name
+                    if os.path.commonpath([decrypted_path, path]) == decrypted_path:
+                        return True
+                except Exception:
+                    pass
         return False
 
     def delete_expired_files(self) -> int:
@@ -315,6 +335,36 @@ class Database:
         with self.lock:
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
+
+    def get_peer_permissions(self, ip: str) -> dict:
+        """Fetch granular permissions for a peer."""
+        with self.lock:
+            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+        if row:
+            return {
+                'can_chat': bool(row[0]),
+                'can_list_files': bool(row[1]),
+                'can_download_files': bool(row[2]),
+                'is_blocked': bool(row[3])
+            }
+        # Default permissions for unknown peers
+        return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
+
+    def update_peer_permissions(self, ip: str, permissions: dict):
+        """Update granular permissions for a peer."""
+        with self.lock:
+            with self.conn:
+                # Build update query dynamically
+                fields = []
+                values = []
+                for k, v in permissions.items():
+                    if k in ['can_chat', 'can_list_files', 'can_download_files', 'is_blocked']:
+                        fields.append(f"{k} = ?")
+                        values.append(1 if v else 0)
+                if fields:
+                    values.append(ip)
+                    self.conn.execute(f"UPDATE trusted_peers SET {', '.join(fields)} WHERE ip = ?", tuple(values))
 
     def add_audit_log(self, event_type: str, details: str):
         timestamp = time.time()

@@ -56,6 +56,15 @@ class FileTransferManager:
         while self.running:
             try:
                 client, addr = self.server_socket.accept()
+
+                # PRE-TLS check for blocked peers
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    logger = audit.get_logger()
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked peer {addr[0]} tried to connect (File Transfer).")
+                    client.close()
+                    continue
+
                 # Wrap the raw socket with TLS before handing to handler
                 client = wrap_socket(client, server_side=True)
 
@@ -120,10 +129,21 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Authentication failed'}).encode())
                     return
                 # token matches – continue processing
+
+            # Granular permission check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                return
+
             cmd = req.get('cmd')
             if not isinstance(cmd, str): return
 
             if cmd == 'PUSH_FILE':
+                if not perms.get('can_download_files'): # In this context, PUSH means they are sending to us
+                     # We might want a separate permission for this, but let's reuse
+                     pass
+
                 filename = req.get('filename')
                 size = req.get('size')
                 if not isinstance(filename, str) or not isinstance(size, int): return
@@ -134,6 +154,11 @@ class FileTransferManager:
                 self.receive_stream(client, filename, size)
 
             elif cmd == 'PULL_FILE':
+                if not perms.get('can_download_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} denied PULL_FILE: permission missing.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Download permission denied'}).encode())
+                    return
+
                 path = req.get('path')
                 if not isinstance(path, str):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed PULL_FILE request from {addr[0]}: path must be a string.")
@@ -168,6 +193,11 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found or expired'}).encode())
 
             elif cmd == 'LIST_SHARED':
+                if not perms.get('can_list_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} denied LIST_SHARED: permission missing.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'List permission denied'}).encode())
+                    return
+
                 files = self.db.get_files()
                 file_list = []
                 for f in files:
@@ -186,6 +216,11 @@ class FileTransferManager:
                 client.sendall(data_encoded)
 
             elif cmd == 'LIST_FOLDER':
+                if not perms.get('can_list_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} denied LIST_FOLDER: permission missing.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'List permission denied'}).encode())
+                    return
+
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 path_str = req.get('path')
                 if not isinstance(path_str, str):

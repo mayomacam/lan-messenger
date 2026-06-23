@@ -423,6 +423,10 @@ class LANMessengerApp(ctk.CTk):
                               command=lambda i=ip, n=name: self.open_private_chat(i, n))
             btn_chat.pack(side="right", padx=2)
 
+            btn_sec = ctk.CTkButton(row, text="Sec", width=40, height=20, fg_color="#7f8c8d",
+                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+            btn_sec.pack(side="right", padx=2)
+
             # Trust indicator
             trust = self.peer_trust.get(ip, 'untrusted')
             color = "gray"
@@ -960,6 +964,11 @@ class LANMessengerApp(ctk.CTk):
         save_btn.pack(pady=20)
         self.after(200, lambda: entry_chat.focus_set())
 
+    def open_peer_security(self, ip, name):
+        """Open the granular security settings for a peer."""
+        dialog = PeerSecurityDialog(self, self.db, ip, name)
+        dialog.focus()
+
     def on_closing(self):
         if hasattr(self, 'discovery'):
             self.discovery.stop()
@@ -967,6 +976,57 @@ class LANMessengerApp(ctk.CTk):
         self.file_manager.close()
         self.db.close()
         self.executor.shutdown(wait=False)
+        self.destroy()
+
+class PeerSecurityDialog(ctk.CTkToplevel):
+    def __init__(self, parent, db, peer_ip, peer_name):
+        super().__init__(parent)
+        self.db = db
+        self.peer_ip = peer_ip
+        self.peer_name = peer_name
+
+        self.title(f"Security: {peer_name}")
+        self.geometry("350x450")
+        self.transient(parent)
+        self.grab_set() # Modal
+
+        # Current perms
+        self.perms = self.db.get_peer_permissions(peer_ip)
+
+        ctk.CTkLabel(self, text=f"Manage Permissions for {peer_name}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
+        ctk.CTkLabel(self, text=f"IP: {peer_ip}", font=ctk.CTkFont(size=12)).pack(pady=(0, 10))
+
+        self.blocked_var = ctk.BooleanVar(value=self.perms.get('is_blocked', False))
+        self.chat_var = ctk.BooleanVar(value=self.perms.get('can_chat', True))
+        self.list_var = ctk.BooleanVar(value=self.perms.get('can_list_files', True))
+        self.download_var = ctk.BooleanVar(value=self.perms.get('can_download_files', True))
+
+        # Checkboxes
+        ctk.CTkCheckBox(self, text="Is Blocked (Drops all connections)", variable=self.blocked_var, fg_color="red").pack(pady=10, padx=20, anchor="w")
+        ctk.CTkLabel(self, text="--- Fine Grained Access ---", font=ctk.CTkFont(slant="italic")).pack(pady=10)
+        ctk.CTkCheckBox(self, text="Can Send Messages", variable=self.chat_var).pack(pady=5, padx=20, anchor="w")
+        ctk.CTkCheckBox(self, text="Can List My Files", variable=self.list_var).pack(pady=5, padx=20, anchor="w")
+        ctk.CTkCheckBox(self, text="Can Download My Files", variable=self.download_var).pack(pady=5, padx=20, anchor="w")
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=30)
+
+        ctk.CTkButton(btn_frame, text="Save Settings", command=self.save, fg_color="green", width=120).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Cancel", command=self.destroy, fg_color="gray", width=100).pack(side="left", padx=10)
+
+    def save(self):
+        new_perms = {
+            'is_blocked': self.blocked_var.get(),
+            'can_chat': self.chat_var.get(),
+            'can_list_files': self.list_var.get(),
+            'can_download_files': self.download_var.get()
+        }
+        self.db.update_peer_permissions(self.peer_ip, new_perms)
+
+        logger = audit.get_logger()
+        if logger:
+            logger.log("SECURITY_POLICY_CHANGE", f"Updated permissions for {self.peer_name} ({self.peer_ip}): {new_perms}")
+
         self.destroy()
 
 if __name__ == "__main__":
