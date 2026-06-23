@@ -89,7 +89,6 @@ class LANMessengerApp(ctk.CTk):
 
         # Periodic Updates
         self.after(2000, self.refresh_peers)
-        self.after(10000, self.reap_messages)
         self.load_chat_history()
         self.after(100, lambda: self.msg_entry.focus_set())
 
@@ -97,27 +96,36 @@ class LANMessengerApp(ctk.CTk):
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
         self.reaper_thread.start()
 
+    def _refresh_after_reap(self):
+        """Thread-safe UI refresh after background reaping, checking visibility."""
+        if not self.winfo_exists(): return
+        current_tab = self.tabview.get()
+        if current_tab == "Global Chat":
+            self.load_chat_history()
+        elif current_tab.startswith("Chat: "):
+            if self.current_private_peer:
+                self.load_private_chat(self.current_private_peer)
+        elif current_tab == "Files" and self.current_file_view_source == "Local":
+            self.refresh_files_view()
+
     def message_reaper_loop(self):
         while True:
             try:
-                # Reap messages
+                # Reap messages and files in background
                 msg_count = self.db.reap_expired_messages()
-                if msg_count > 0:
-                    self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
-                    self.after(0, self.load_chat_history)
-                    # Also reload private chat if open
-                    if self.current_private_peer:
-                        self.after(0, lambda p=self.current_private_peer: self.load_private_chat(p))
-
-                # Reap files
                 file_count = self.db.delete_expired_files()
-                if file_count > 0:
-                    self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
-                    if self.current_file_view_source == "Local":
-                        self.after(0, self.refresh_files_view)
+
+                if msg_count > 0 or file_count > 0:
+                    if msg_count > 0:
+                        self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
+                    if file_count > 0:
+                        self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
+
+                    # Schedule UI refresh on main thread
+                    self.after(0, self._refresh_after_reap)
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
-            time.sleep(60)
+            time.sleep(15) # Optimized polling interval
 
     def prompt_username(self):
         dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
@@ -364,23 +372,6 @@ class LANMessengerApp(ctk.CTk):
             # Non-blocking success feedback
             self.change_name_btn.configure(text="Saved", fg_color="#2ecc71")
             self.after(2000, lambda: self.change_name_btn.configure(text="Set", fg_color=("#3B8ED0", "#1F6AA5")))
-
-    def reap_messages(self):
-        """Periodically remove expired messages from the database and refresh UI."""
-        deleted_count = self.db.delete_expired_messages()
-        if deleted_count == 0:
-            self.after(10000, self.reap_messages)
-            return
-
-        # Only refresh if we are on a chat tab
-        current_tab = self.tabview.get()
-        if current_tab == "Global Chat":
-            self.load_chat_history()
-        elif current_tab.startswith("Chat: "):
-            if self.current_private_peer:
-                self.load_private_chat(self.current_private_peer)
-
-        self.after(10000, self.reap_messages) # Run every 10s
 
     def show_trust_warning(self, ip):
         if messagebox.askyesno("Security Warning", f"Fingerprint mismatch detected for {ip}!\nThis could be a Man-in-the-Middle attack or the user reinstalled the app.\n\nDo you want to trust this new identity?"):
