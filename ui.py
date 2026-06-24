@@ -97,6 +97,13 @@ class LANMessengerApp(ctk.CTk):
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
         self.reaper_thread.start()
 
+        # Global Hotkeys
+        self.bind("<Control-f>", self.focus_search)
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+
     def message_reaper_loop(self):
         while True:
             try:
@@ -440,6 +447,7 @@ class LANMessengerApp(ctk.CTk):
         dialog.title("Connect to IP")
         dialog.geometry("300x280")
         dialog.transient(self)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
 
         ip_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         ip_frame.pack(pady=10)
@@ -735,11 +743,15 @@ class LANMessengerApp(ctk.CTk):
             size = os.path.getsize(path)
             checksum = FileTransferManager.calculate_sha256(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self.get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(filename, path, size, local_ip, is_folder=False, checksum=checksum, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
+
+            # Non-blocking success feedback
+            self.share_btn.configure(text="Shared!", fg_color="#2ecc71")
+            self.after(2000, lambda: self.share_btn.configure(text="Share File", fg_color=("#3B8ED0", "#1F6AA5")))
 
     def get_folder_size(self, path):
         total_size = 0
@@ -756,11 +768,15 @@ class LANMessengerApp(ctk.CTk):
             dirname = os.path.basename(path)
             size = self.get_folder_size(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self.get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(dirname, path, size, local_ip, is_folder=True, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
+
+            # Non-blocking success feedback
+            self.share_folder_btn.configure(text="Shared!", fg_color="#2ecc71")
+            self.after(2000, lambda: self.share_folder_btn.configure(text="Share Folder", fg_color=("#3B8ED0", "#1F6AA5")))
 
     def show_my_files(self):
         self.current_file_view_source = "Local"
@@ -956,6 +972,7 @@ class LANMessengerApp(ctk.CTk):
 
         entry_chat.bind("<Return>", save)
         entry_file.bind("<Return>", save)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         save_btn = ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green")
         save_btn.pack(pady=20)
         self.after(200, lambda: entry_chat.focus_set())
