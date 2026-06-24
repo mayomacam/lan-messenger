@@ -8,7 +8,7 @@ import os
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ssl_utils import wrap_socket, get_cert_fingerprint
+from ssl_utils import wrap_socket, get_cert_fingerprint, get_peer_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
@@ -111,6 +111,9 @@ class DiscoveryManager:
 class NetworkManager:
     def __init__(self, db, port, callback_update_ui=None, auth_token=None, allowed_ips=None):
         self.db = db
+        # Ensure audit logger is initialized for this database
+        if self.db:
+            audit.init_logger(self.db)
         self.port = port
         self.callback = callback_update_ui
         self.auth_token = auth_token
@@ -169,6 +172,14 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+
+                # Pre-TLS Check: Drop connections from blocked IPs
+                permissions = self.db.get_peer_permissions(addr[0])
+                if permissions.get('is_blocked'):
+                    print(f"[DEBUG] Blocking connection from blocked IP: {addr[0]}")
+                    client.close()
+                    continue
+
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
 
@@ -260,9 +271,18 @@ class NetworkManager:
 
     def handle_client(self, client, addr):
         """Process incoming client packets with optional IP whitelist and token verification."""
+        if not audit.get_logger():
+             audit.init_logger(self.db)
         logger = audit.get_logger()
         try:
             client.settimeout(10)
+
+            # Granular Access Control: Check if blocked
+            permissions = self.db.get_peer_permissions(addr[0])
+            if permissions.get('is_blocked'):
+                if logger: logger.log("SECURITY_ALERT", f"Request from blocked peer {addr[0]} rejected.")
+                return
+
             # IP whitelist enforcement
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 msg = f"Connection from {addr[0]} rejected: IP not allowed."
@@ -293,6 +313,11 @@ class NetworkManager:
             # Existing message handling with validation
             msg_type = data.get('type')
             if not isinstance(msg_type, str):
+                return
+
+            # Enforce Chat Permission
+            if msg_type in ['MSG', 'MSG_PRIV', 'MSG_EDIT', 'MSG_DEL'] and not permissions.get('can_chat'):
+                if logger: logger.log("SECURITY_ALERT", f"Chat attempt from peer {addr[0]} blocked due to permissions.")
                 return
 
             if msg_type == 'HELLO':

@@ -34,6 +34,9 @@ class FileTransferManager:
             allowed_ips: Optional list of client IPs allowed to connect.
         """
         self.db = db
+        # Ensure audit logger is initialized for this database
+        if self.db:
+            audit.init_logger(self.db)
         self.port = port
         self.save_dir = save_dir
         self.bind_ip = bind_ip
@@ -88,11 +91,20 @@ class FileTransferManager:
 
     def handle_client(self, client, addr):
         """Handle a client connection.
-        Includes optional IP whitelist enforcement.
+        Includes optional IP whitelist enforcement and granular permissions.
         """
+        if not audit.get_logger():
+            audit.init_logger(self.db)
         logger = audit.get_logger()
         try:
             client.settimeout(10)
+
+            # Granular Access Control: Check if blocked
+            permissions = self.db.get_peer_permissions(addr[0])
+            if permissions.get('is_blocked'):
+                if logger: logger.log("SECURITY_ALERT", f"File transfer request from blocked peer {addr[0]} rejected.")
+                return
+
             # IP whitelist check
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: IP not allowed.")
@@ -124,6 +136,8 @@ class FileTransferManager:
             if not isinstance(cmd, str): return
 
             if cmd == 'PUSH_FILE':
+                # PUSH_FILE is someone sending to us.
+                # We could have a can_receive_files permission, but for now we'll allow it if not blocked.
                 filename = req.get('filename')
                 size = req.get('size')
                 if not isinstance(filename, str) or not isinstance(size, int): return
@@ -134,6 +148,12 @@ class FileTransferManager:
                 self.receive_stream(client, filename, size)
 
             elif cmd == 'PULL_FILE':
+                # Enforce Permission
+                if not permissions.get('can_download_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"PULL_FILE from {addr[0]} blocked due to permissions.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
+
                 path = req.get('path')
                 if not isinstance(path, str):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed PULL_FILE request from {addr[0]}: path must be a string.")
@@ -168,6 +188,12 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found or expired'}).encode())
 
             elif cmd == 'LIST_SHARED':
+                # Enforce Permission
+                if not permissions.get('can_list_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"LIST_SHARED from {addr[0]} blocked due to permissions.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
+
                 files = self.db.get_files()
                 file_list = []
                 for f in files:
@@ -186,6 +212,12 @@ class FileTransferManager:
                 client.sendall(data_encoded)
 
             elif cmd == 'LIST_FOLDER':
+                # Enforce Permission
+                if not permissions.get('can_list_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"LIST_FOLDER from {addr[0]} blocked due to permissions.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
+
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 path_str = req.get('path')
                 if not isinstance(path_str, str):
