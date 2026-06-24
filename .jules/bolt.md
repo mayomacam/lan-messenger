@@ -33,3 +33,7 @@
 ## 2025-05-23 - [LRU Caching and Selective Data Fetching]
 **Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
 **Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
+
+## 2025-05-24 - [Metadata-validated Hash Caching]
+**Learning:** Calculating SHA-256 hashes for directory listings is an O(N) operation on total file size, causing severe I/O bottlenecks. Using 'functools.lru_cache' with a composite key of (path, mtime, size) allows for O(1) retrieval while maintaining strict integrity, reducing listing times for large folders by orders of magnitude.
+**Action:** Use metadata-validated caching for expensive file-system operations like hashing or deep directory scans.
