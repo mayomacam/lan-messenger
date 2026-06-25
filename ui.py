@@ -322,6 +322,10 @@ class LANMessengerApp(ctk.CTk):
 
         self.audit_display = ctk.CTkTextbox(self.audit_tab, state="disabled")
         self.audit_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self.audit_display._textbox.tag_config("alert", foreground="#e74c3c")
+        self.audit_display._textbox.tag_config("warning", foreground="#e67e22")
+        self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
+        self.audit_display._textbox.tag_config("center", justify="center")
 
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
         self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -330,21 +334,37 @@ class LANMessengerApp(ctk.CTk):
         self.refresh_audit_btn.pack(pady=5)
 
     def load_audit_logs(self):
+        # Success feedback for button if it exists
+        if hasattr(self, 'refresh_audit_btn'):
+            self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
+            self.after(1500, lambda: self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5")) if self.refresh_audit_btn.winfo_exists() else None)
+
         logs = self.db.get_audit_logs(200)
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
-        lines = []
-        for log in logs:
-            # log: (id, event_type, details, timestamp)
-            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            lines.append(f"[{ts}] {log[1]}: {log[2]}")
+        if not logs:
+            self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+        else:
+            for log in logs:
+                # log: (id, event_type, details, timestamp)
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+                event_type = log[1]
+                details = log[2]
 
-        if lines:
-            self.audit_display.insert("end", "\n".join(lines) + "\n")
+                tag = "info"
+                if event_type in ["SECURITY_ALERT", "FILE_INTEGRITY_FAILURE"]:
+                    tag = "alert"
+                elif event_type in ["AUTH_FAILURE"]:
+                    tag = "warning"
+                elif event_type in ["FILE_TRANSFER", "FILE_INTEGRITY_SUCCESS", "CONNECTION"]:
+                    tag = "info"
+
+                self.audit_display.insert("end", f"[{ts}] {event_type}: {details}\n", tag)
 
         self.audit_display.configure(state="disabled")
-        self.audit_display.see("end")
+        # Logs are returned in reverse-chronological order (newest first) from the DB
+        self.audit_display.see("1.0")
 
     def update_username(self, event=None):
         new_name = self.username_entry.get().strip()
@@ -735,7 +755,7 @@ class LANMessengerApp(ctk.CTk):
             size = os.path.getsize(path)
             checksum = FileTransferManager.calculate_sha256(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self.get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(filename, path, size, local_ip, is_folder=False, checksum=checksum, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
@@ -756,7 +776,7 @@ class LANMessengerApp(ctk.CTk):
             dirname = os.path.basename(path)
             size = self.get_folder_size(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self.get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(dirname, path, size, local_ip, is_folder=True, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
