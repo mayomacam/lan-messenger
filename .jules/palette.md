@@ -29,3 +29,7 @@
 ## 2026-06-18 - Keyboard accessibility for search components
 **Learning:** Adding the `Esc` key shortcut for clearing search bars is a standard UX pattern that improves keyboard accessibility and efficiency for power users, complementing visual clear buttons.
 **Action:** Always ensure interactive filtering or search components have consistent keyboard-driven reset mechanisms (like the Escape key).
+
+## 2026-06-20 - Semantic Tagging and Chronological Awareness in Logs
+**Learning:** Using semantic color-coding (e.g., Red for alerts, Green for success) in audit logs significantly improves the speed at which users can identify critical security events. Furthermore, for logs that are presented in reverse-chronological order (newest first), the UI should ensure the scroll position is set to the top (1.0) rather than the bottom (end) to immediately show the most relevant data.
+**Action:** Use specific tags like 'alert', 'warning', and 'info' for log entries and adjust scrolling behavior based on the data's sort order to prioritize the most recent information.
