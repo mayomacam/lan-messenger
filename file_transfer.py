@@ -4,21 +4,29 @@ import os
 import json
 import time
 import hashlib
+import functools
 from pathlib import Path
 from ssl_utils import wrap_socket, get_peer_fingerprint
 import audit
 
+@functools.lru_cache(maxsize=1024)
+def _calculate_sha256_cached(filepath, mtime, size):
+    """Internal cached hashing function using file metadata (path, mtime, size) as the key."""
+    sha256_hash = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        # Read and update hash string value in blocks of 64K
+        for byte_block in iter(lambda: f.read(65536), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
 class FileTransferManager:
     @staticmethod
     def calculate_sha256(filepath):
-        """Calculate the SHA-256 hash of a file."""
-        sha256_hash = hashlib.sha256()
+        """Calculate the SHA-256 hash of a file with metadata-based caching."""
         try:
-            with open(filepath, "rb") as f:
-                # Read and update hash string value in blocks of 64K
-                for byte_block in iter(lambda: f.read(65536), b""):
-                    sha256_hash.update(byte_block)
-            return sha256_hash.hexdigest()
+            # Use file metadata to check cache; avoids redundant disk I/O for unchanged files
+            stat = os.stat(filepath)
+            return _calculate_sha256_cached(filepath, stat.st_mtime, stat.st_size)
         except Exception as e:
             print(f"[DEBUG] Error calculating hash for {filepath}: {e}")
             return None
