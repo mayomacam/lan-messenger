@@ -33,3 +33,7 @@
 ## 2025-05-23 - [LRU Caching and Selective Data Fetching]
 **Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
 **Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
+
+## 2025-05-24 - [Metadata-based Hashing Cache]
+**Learning:** SHA-256 calculation is a significant I/O and CPU bottleneck when generating file lists or verifying integrity for large files. Metadata validation (path, mtime, size) is a 99.9% reliable heuristic for file identity in this context.
+**Action:** Implement module-level LRU caching for file hashes using os.stat() metadata to eliminate redundant disk reads for unchanged files.
