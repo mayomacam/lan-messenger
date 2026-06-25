@@ -17,6 +17,50 @@ from config import load_settings, save_settings
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
+class PeerSecurityDialog(ctk.CTkToplevel):
+    def __init__(self, parent, ip, username, db):
+        super().__init__(parent)
+        self.title(f"Security: {username}")
+        self.geometry("350x400")
+        self.ip = ip
+        self.db = db
+        self.username = username
+        self.transient(parent)
+
+        self.perms = self.db.get_peer_permissions(ip)
+
+        ctk.CTkLabel(self, text=f"Permissions for {username}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
+        ctk.CTkLabel(self, text=f"IP: {ip}", font=ctk.CTkFont(size=12)).pack(pady=(0, 20))
+
+        self.chat_var = ctk.BooleanVar(value=self.perms.get('can_chat', True))
+        ctk.CTkCheckBox(self, text="Can Chat", variable=self.chat_var).pack(pady=5, padx=50, anchor="w")
+
+        self.list_var = ctk.BooleanVar(value=self.perms.get('can_list_files', True))
+        ctk.CTkCheckBox(self, text="Can List Files", variable=self.list_var).pack(pady=5, padx=50, anchor="w")
+
+        self.download_var = ctk.BooleanVar(value=self.perms.get('can_download_files', True))
+        ctk.CTkCheckBox(self, text="Can Download Files", variable=self.download_var).pack(pady=5, padx=50, anchor="w")
+
+        self.blocked_var = ctk.BooleanVar(value=self.perms.get('is_blocked', False))
+        ctk.CTkCheckBox(self, text="Blocked", variable=self.blocked_var, fg_color="red", hover_color="#8b0000").pack(pady=20, padx=50, anchor="w")
+
+        ctk.CTkButton(self, text="Save Settings", command=self.save).pack(pady=20)
+
+    def save(self):
+        new_perms = {
+            'can_chat': self.chat_var.get(),
+            'can_list_files': self.list_var.get(),
+            'can_download_files': self.download_var.get(),
+            'is_blocked': self.blocked_var.get()
+        }
+        self.db.update_peer_permissions(self.ip, new_perms)
+
+        logger = audit.get_logger()
+        if logger:
+            logger.log("SECURITY_POLICY_CHANGE", f"Permissions updated for {self.username} ({self.ip}): {new_perms}")
+
+        self.destroy()
+
 class LANMessengerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -213,7 +257,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.chat_display.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
+        self.chat_display.tag_config("search_info", foreground="#3B8ED0")
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -334,14 +378,20 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
-        lines = []
+        self.audit_display.tag_config("SECURITY_ALERT", foreground="red")
+        self.audit_display.tag_config("AUTH_FAILURE", foreground="orange")
+        self.audit_display.tag_config("SECURITY_POLICY_CHANGE", foreground="cyan")
+
         for log in logs:
             # log: (id, event_type, details, timestamp)
             ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            lines.append(f"[{ts}] {log[1]}: {log[2]}")
+            event_type = log[1]
+            line = f"[{ts}] {event_type}: {log[2]}\n"
 
-        if lines:
-            self.audit_display.insert("end", "\n".join(lines) + "\n")
+            if event_type in ["SECURITY_ALERT", "AUTH_FAILURE", "SECURITY_POLICY_CHANGE"]:
+                self.audit_display.insert("end", line, event_type)
+            else:
+                self.audit_display.insert("end", line)
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("end")
@@ -422,6 +472,10 @@ class LANMessengerApp(ctk.CTk):
             btn_chat = ctk.CTkButton(row, text="Chat", width=60, height=20,
                               command=lambda i=ip, n=name: self.open_private_chat(i, n))
             btn_chat.pack(side="right", padx=2)
+
+            btn_sec = ctk.CTkButton(row, text="Sec", width=40, height=20, fg_color="#555",
+                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+            btn_sec.pack(side="right", padx=2)
 
             # Trust indicator
             trust = self.peer_trust.get(ip, 'untrusted')
@@ -591,6 +645,9 @@ class LANMessengerApp(ctk.CTk):
 
         self.msg_entry.delete(0, "end")
         self.load_chat_history()
+
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, ip, name, self.db)
 
     def open_private_chat(self, ip, name):
         # Find if we already have a tab for this IP

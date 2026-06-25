@@ -122,7 +122,7 @@ class Database:
             if 'expires_at' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN expires_at REAL")
 
-            # Trusted Peers table: ip, username, fingerprint, trust_level, last_seen
+            # Trusted Peers table: ip, username, fingerprint, trust_level, permissions, last_seen
             # New installations use this schema
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trusted_peers (
@@ -130,27 +130,28 @@ class Database:
                     username TEXT,
                     fingerprint TEXT,
                     trust_level TEXT DEFAULT 'untrusted',
+                    can_chat BOOLEAN DEFAULT 1,
+                    can_list_files BOOLEAN DEFAULT 1,
+                    can_download_files BOOLEAN DEFAULT 1,
+                    is_blocked BOOLEAN DEFAULT 0,
                     last_seen REAL
                 )
             """)
-            # Migration for existing installations with old 3-column schema (ip, fingerprint, last_seen)
+            # Migration for existing installations
             cursor.execute("PRAGMA table_info(trusted_peers)")
             tp_columns = [info[1] for info in cursor.fetchall()]
             if 'username' not in tp_columns:
-                # SQLite doesn't allow adding columns in the middle.
-                # To maintain (ip, username, fingerprint, trust_level, last_seen) order:
-                if len(tp_columns) == 3 and tp_columns[1] == 'fingerprint':
-                    # This is the old schema. We need to rename and recreate or just append.
-                    # Appending is safer than re-creating for P2P.
-                    # But the code expects a certain order.
-                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
-                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
-                    # Now it has (ip, fingerprint, last_seen, username, trust_level)
-                else:
-                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
             if 'trust_level' not in tp_columns:
-                if 'trust_level' not in [info[1] for info in cursor.execute("PRAGMA table_info(trusted_peers)").fetchall()]:
-                    cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
+            if 'can_chat' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_chat BOOLEAN DEFAULT 1")
+            if 'can_list_files' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_list_files BOOLEAN DEFAULT 1")
+            if 'can_download_files' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files BOOLEAN DEFAULT 1")
+            if 'is_blocked' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked BOOLEAN DEFAULT 0")
 
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
@@ -285,21 +286,60 @@ class Database:
         now = time.time()
         with self.lock:
             with self.conn:
+                # Use COALESCE to preserve existing permissions if they exist
                 self.conn.execute("""
                     INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
                     VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(ip) DO UPDATE SET
                         username=excluded.username,
                         fingerprint=excluded.fingerprint,
-                        trust_level=excluded.trust_level,
+                        trust_level=COALESCE(trust_level, excluded.trust_level),
                         last_seen=excluded.last_seen
                 """, (ip, username, fingerprint, trust_level, now))
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
             # Explicitly select columns to handle schema variations gracefully
-            cursor = self.conn.execute("SELECT ip, username, fingerprint, trust_level, last_seen FROM trusted_peers WHERE ip = ?", (ip,))
+            cursor = self.conn.execute("SELECT ip, username, fingerprint, trust_level, can_chat, can_list_files, can_download_files, is_blocked, last_seen FROM trusted_peers WHERE ip = ?", (ip,))
             return cursor.fetchone()
+
+    def get_peer_permissions(self, ip: str) -> dict:
+        """Get granular permissions for a peer."""
+        # Normalize localhost to allow testing on a single machine
+        if ip == "127.0.0.1":
+            # For testing, we might want to check the specific entry,
+            # but usually it's better to use the IP as is.
+            pass
+        with self.lock:
+            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'can_chat': bool(row[0]),
+                    'can_list_files': bool(row[1]),
+                    'can_download_files': bool(row[2]),
+                    'is_blocked': bool(row[3])
+                }
+            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
+
+    def update_peer_permissions(self, ip: str, permissions_dict: dict):
+        """Update granular permissions for a peer."""
+        fields = []
+        values = []
+        for key in ['can_chat', 'can_list_files', 'can_download_files', 'is_blocked']:
+            if key in permissions_dict:
+                fields.append(f"{key} = ?")
+                values.append(1 if permissions_dict[key] else 0)
+
+        if not fields:
+            return
+
+        values.append(ip)
+        query = f"UPDATE trusted_peers SET {', '.join(fields)} WHERE ip = ?"
+
+        with self.lock:
+            with self.conn:
+                self.conn.execute(query, tuple(values))
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         """Batch fetch trust levels for multiple IPs to reduce DB roundtrips."""

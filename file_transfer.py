@@ -56,6 +56,17 @@ class FileTransferManager:
         while self.running:
             try:
                 client, addr = self.server_socket.accept()
+
+                # Proactive Blocking
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    msg = f"SECURITY ALERT: Blocked peer {addr[0]} attempted file connection."
+                    print(f"[DEBUG] {msg}")
+                    logger = audit.get_logger()
+                    if logger: logger.log("SECURITY_ALERT", msg)
+                    client.close()
+                    continue
+
                 # Wrap the raw socket with TLS before handing to handler
                 client = wrap_socket(client, server_side=True)
 
@@ -123,6 +134,12 @@ class FileTransferManager:
             cmd = req.get('cmd')
             if not isinstance(cmd, str): return
 
+            # Permissions enforcement
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                if logger: logger.log("SECURITY_ALERT", f"File request from blocked peer {addr[0]} dropped.")
+                return
+
             if cmd == 'PUSH_FILE':
                 filename = req.get('filename')
                 size = req.get('size')
@@ -134,6 +151,10 @@ class FileTransferManager:
                 self.receive_stream(client, filename, size)
 
             elif cmd == 'PULL_FILE':
+                if not perms.get('can_download_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Unauthorized download attempt from {addr[0]}.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
                 path = req.get('path')
                 if not isinstance(path, str):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed PULL_FILE request from {addr[0]}: path must be a string.")
@@ -168,6 +189,10 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found or expired'}).encode())
 
             elif cmd == 'LIST_SHARED':
+                if not perms.get('can_list_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Unauthorized LIST_SHARED attempt from {addr[0]}.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
                 files = self.db.get_files()
                 file_list = []
                 for f in files:
@@ -186,6 +211,10 @@ class FileTransferManager:
                 client.sendall(data_encoded)
 
             elif cmd == 'LIST_FOLDER':
+                if not perms.get('can_list_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Unauthorized LIST_FOLDER attempt from {addr[0]}.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 path_str = req.get('path')
                 if not isinstance(path_str, str):
