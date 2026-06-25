@@ -8,7 +8,7 @@ import os
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ssl_utils import wrap_socket, get_cert_fingerprint
+from ssl_utils import wrap_socket, get_cert_fingerprint, get_peer_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
@@ -169,6 +169,17 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+
+                # Proactive Blocking: Check if peer is blocked before TLS handshake
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    msg = f"SECURITY ALERT: Blocked peer {addr[0]} attempted to connect."
+                    print(f"[DEBUG] {msg}")
+                    logger = audit.get_logger()
+                    if logger: logger.log("SECURITY_ALERT", msg)
+                    client.close()
+                    continue
+
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
 
@@ -295,6 +306,12 @@ class NetworkManager:
             if not isinstance(msg_type, str):
                 return
 
+            # Permissions enforcement
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                if logger: logger.log("SECURITY_ALERT", f"Request from blocked peer {addr[0]} dropped.")
+                return
+
             if msg_type == 'HELLO':
                 sender_username = data.get('username')
                 if not isinstance(sender_username, str): return
@@ -302,6 +319,10 @@ class NetworkManager:
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
 
             elif msg_type == 'MSG':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Unauthorized chat attempt from {addr[0]}.")
+                    self._send_json(client, {'status': 'ERR', 'msg': 'Access denied'})
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -314,6 +335,10 @@ class NetworkManager:
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
             elif msg_type == 'MSG_PRIV':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Unauthorized private chat attempt from {addr[0]}.")
+                    self._send_json(client, {'status': 'ERR', 'msg': 'Access denied'})
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
