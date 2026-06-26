@@ -8,7 +8,7 @@ import os
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ssl_utils import wrap_socket, get_cert_fingerprint
+from ssl_utils import wrap_socket, get_cert_fingerprint, get_peer_fingerprint
 from constants import UDP_BROADCAST_PORT, BROADCAST_IP
 import audit
 
@@ -271,6 +271,15 @@ class NetworkManager:
                 self._send_json(client, {'status': 'ERR', 'msg': 'IP not allowed'})
                 return
 
+            # Check if peer is blocked
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                msg = f"Connection from blocked peer {addr[0]} rejected."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                self._send_json(client, {'status': 'ERR', 'msg': 'Peer is blocked'})
+                return
+
             data = self._recv_json(client)
             if not data:
                 return
@@ -302,6 +311,9 @@ class NetworkManager:
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
 
             elif msg_type == 'MSG':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG from peer {addr[0]}: Chat disabled.")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -314,6 +326,9 @@ class NetworkManager:
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
             elif msg_type == 'MSG_PRIV':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_PRIV from peer {addr[0]}: Chat disabled.")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -327,6 +342,9 @@ class NetworkManager:
                 if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])
 
             elif msg_type == 'MSG_EDIT':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_EDIT from peer {addr[0]}: Chat disabled.")
+                    return
                 msg_id = data.get('id')
                 new_content = data.get('content')
                 if not all(isinstance(x, str) for x in [msg_id, new_content]):
@@ -335,6 +353,9 @@ class NetworkManager:
                 if self.callback: self.callback('EDIT', msg_id, new_content)
 
             elif msg_type == 'MSG_DEL':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_DEL from peer {addr[0]}: Chat disabled.")
+                    return
                 msg_id = data.get('id')
                 if not isinstance(msg_id, str): return
                 self.db.delete_message(msg_id)
