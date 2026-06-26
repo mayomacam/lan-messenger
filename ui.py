@@ -520,6 +520,7 @@ class LANMessengerApp(ctk.CTk):
     def focus_search(self, event=None):
         self.tabview.set("Global Chat")
         self.search_entry.focus_set()
+        return "break"
 
     def load_chat_history(self):
         if self._search_timer:
