@@ -753,7 +753,10 @@ class LANMessengerApp(ctk.CTk):
 
             # Visual feedback
             self.share_btn.configure(text="Shared!", fg_color="#2ecc71")
-            self.after(2000, lambda: self.share_btn.configure(text="Share File", fg_color=("#3B8ED0", "#1F6AA5")))
+            def reset_share_btn():
+                if self.share_btn.winfo_exists():
+                    self.share_btn.configure(text="Share File", fg_color=("#3B8ED0", "#1F6AA5"))
+            self.after(2000, reset_share_btn)
 
     def get_folder_size(self, path):
         total_size = 0
