@@ -164,6 +164,17 @@ class Database:
             if 'is_blocked' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked BOOLEAN DEFAULT 0")
 
+            # Migration for granular permissions
+            updated_tp_columns = [info[1] for info in cursor.execute("PRAGMA table_info(trusted_peers)").fetchall()]
+            if 'can_chat' not in updated_tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_chat INTEGER DEFAULT 1")
+            if 'can_list_files' not in updated_tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_list_files INTEGER DEFAULT 1")
+            if 'can_download_files' not in updated_tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files INTEGER DEFAULT 1")
+            if 'is_blocked' not in updated_tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked INTEGER DEFAULT 0")
+
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (

@@ -320,6 +320,12 @@ class NetworkManager:
                     self._send_json(client, {'status': 'ERR', 'msg': 'Authentication failed'})
                     return
 
+            # Granular permission check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                self._send_json(client, {'status': 'ERR', 'msg': 'Access denied: blocked'})
+                return
+
             # Existing message handling with validation
             msg_type = data.get('type')
             if not isinstance(msg_type, str):

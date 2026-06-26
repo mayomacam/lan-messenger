@@ -155,6 +155,13 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Authentication failed'}).encode())
                     return
                 # token matches – continue processing
+
+            # Granular permission check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                return
+
             cmd = req.get('cmd')
             if not isinstance(cmd, str): return
 

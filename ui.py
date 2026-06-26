@@ -1177,6 +1177,11 @@ class LANMessengerApp(ctk.CTk):
         dialog.bind("<Escape>", lambda e: dialog.destroy())
         self.after(200, lambda: entry_chat.focus_set())
 
+    def open_peer_security(self, ip, name):
+        """Open the granular security settings for a peer."""
+        dialog = PeerSecurityDialog(self, self.db, ip, name)
+        dialog.focus()
+
     def on_closing(self):
         if hasattr(self, 'discovery'):
             self.discovery.stop()
