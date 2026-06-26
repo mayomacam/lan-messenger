@@ -123,7 +123,8 @@ class LANMessengerApp(ctk.CTk):
                         self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
 
                     # Schedule UI refresh on main thread
-                    self.after(0, self._refresh_after_reap)
+                    if self.winfo_exists():
+                        self.after(0, self._refresh_after_reap)
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
             time.sleep(15) # Optimized polling interval
