@@ -174,6 +174,10 @@ class Database:
                     timestamp REAL NOT NULL
                 )
             """)
+            # Index to speed up ORDER BY timestamp DESC queries
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)")
+
+
             self.conn.commit()
 
     def add_message(self, sender: str, content: str, recipient: str = None, ttl: int = None) -> str:
