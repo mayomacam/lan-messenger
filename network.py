@@ -281,6 +281,15 @@ class NetworkManager:
                 self._send_json(client, {'status': 'ERR', 'msg': 'IP not allowed'})
                 return
 
+            # Check if peer is blocked
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                msg = f"Connection from blocked peer {addr[0]} rejected."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                self._send_json(client, {'status': 'ERR', 'msg': 'Peer is blocked'})
+                return
+
             data = self._recv_json(client)
             if not data:
                 return
@@ -311,52 +320,56 @@ class NetworkManager:
                 if logger: logger.log("CONNECTION", f"Peer {sender_username} ({addr[0]}) connected.")
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
 
-            elif msg_type in ('MSG', 'MSG_PRIV', 'MSG_EDIT', 'MSG_DEL'):
-                # Enforce can_chat permission
-                if not perms.get('can_chat', True):
-                    msg = f"Unauthorized {msg_type} from {addr[0]}: Chat permission denied."
-                    print(f"[DEBUG] {msg}")
-                    if logger: logger.log("SECURITY_ALERT", msg)
+            elif msg_type == 'MSG':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG from peer {addr[0]}: Chat disabled.")
                     return
+                sender = data.get('sender')
+                content = data.get('content')
+                msg_id = data.get('id')
+                ttl = data.get('ttl')
+                if not all(isinstance(x, str) for x in [sender, content, msg_id]):
+                    return
+                timestamp = time.time()
+                expires_at = timestamp + ttl if isinstance(ttl, (int, float)) else None
+                self.db.add_received_message(msg_id, sender, content, timestamp, expires_at=expires_at)
+                if self.callback: self.callback('MSG', msg_id, sender, content)
 
-                if msg_type == 'MSG':
-                    sender = data.get('sender')
-                    content = data.get('content')
-                    msg_id = data.get('id')
-                    ttl = data.get('ttl')
-                    if not all(isinstance(x, str) for x in [sender, content, msg_id]):
-                        return
-                    timestamp = time.time()
-                    expires_at = timestamp + ttl if isinstance(ttl, (int, float)) else None
-                    self.db.add_received_message(msg_id, sender, content, timestamp, expires_at=expires_at)
-                    if self.callback: self.callback('MSG', msg_id, sender, content)
+            elif msg_type == 'MSG_PRIV':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_PRIV from peer {addr[0]}: Chat disabled.")
+                    return
+                sender = data.get('sender')
+                content = data.get('content')
+                msg_id = data.get('id')
+                ttl = data.get('ttl')
+                if not all(isinstance(x, str) for x in [sender, content, msg_id]):
+                    return
+                timestamp = time.time()
+                expires_at = timestamp + ttl if isinstance(ttl, (int, float)) else None
+                # Store with recipient = sender's IP so we can filter by peer_ip later
+                self.db.add_received_message(msg_id, sender, content, timestamp, recipient=addr[0], expires_at=expires_at)
+                if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])
 
-                elif msg_type == 'MSG_PRIV':
-                    sender = data.get('sender')
-                    content = data.get('content')
-                    msg_id = data.get('id')
-                    ttl = data.get('ttl')
-                    if not all(isinstance(x, str) for x in [sender, content, msg_id]):
-                        return
-                    timestamp = time.time()
-                    expires_at = timestamp + ttl if isinstance(ttl, (int, float)) else None
-                    # Store with recipient = sender's IP so we can filter by peer_ip later
-                    self.db.add_received_message(msg_id, sender, content, timestamp, recipient=addr[0], expires_at=expires_at)
-                    if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])
+            elif msg_type == 'MSG_EDIT':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_EDIT from peer {addr[0]}: Chat disabled.")
+                    return
+                msg_id = data.get('id')
+                new_content = data.get('content')
+                if not all(isinstance(x, str) for x in [msg_id, new_content]):
+                    return
+                self.db.edit_message(msg_id, new_content)
+                if self.callback: self.callback('EDIT', msg_id, new_content)
 
-                elif msg_type == 'MSG_EDIT':
-                    msg_id = data.get('id')
-                    new_content = data.get('content')
-                    if not all(isinstance(x, str) for x in [msg_id, new_content]):
-                        return
-                    self.db.edit_message(msg_id, new_content)
-                    if self.callback: self.callback('EDIT', msg_id, new_content)
-
-                elif msg_type == 'MSG_DEL':
-                    msg_id = data.get('id')
-                    if not isinstance(msg_id, str): return
-                    self.db.delete_message(msg_id)
-                    if self.callback: self.callback('DELETE', msg_id)
+            elif msg_type == 'MSG_DEL':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_DEL from peer {addr[0]}: Chat disabled.")
+                    return
+                msg_id = data.get('id')
+                if not isinstance(msg_id, str): return
+                self.db.delete_message(msg_id)
+                if self.callback: self.callback('DELETE', msg_id)
 
             # Additional packet types can be added here
 

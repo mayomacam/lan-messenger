@@ -122,7 +122,7 @@ class Database:
             if 'expires_at' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN expires_at REAL")
 
-            # Trusted Peers table: ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked
+            # Trusted Peers table: ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen
             # New installations use this schema
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trusted_peers (
@@ -130,11 +130,11 @@ class Database:
                     username TEXT,
                     fingerprint TEXT,
                     trust_level TEXT DEFAULT 'untrusted',
-                    last_seen REAL,
+                    is_blocked BOOLEAN DEFAULT 0,
                     can_chat BOOLEAN DEFAULT 1,
                     can_list_files BOOLEAN DEFAULT 1,
                     can_download_files BOOLEAN DEFAULT 1,
-                    is_blocked BOOLEAN DEFAULT 0
+                    last_seen REAL
                 )
             """)
             # Migration for existing installations
@@ -144,14 +144,16 @@ class Database:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
             if 'trust_level' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
+
+            # New granular permission columns
+            if 'is_blocked' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked BOOLEAN DEFAULT 0")
             if 'can_chat' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_chat BOOLEAN DEFAULT 1")
             if 'can_list_files' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_list_files BOOLEAN DEFAULT 1")
             if 'can_download_files' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files BOOLEAN DEFAULT 1")
-            if 'is_blocked' not in tp_columns:
-                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked BOOLEAN DEFAULT 0")
 
             # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
@@ -312,41 +314,46 @@ class Database:
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
-            # Updated to return all columns including permissions
-            cursor = self.conn.execute("SELECT ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            # Explicitly select columns to handle schema variations gracefully
+            cursor = self.conn.execute("""
+                SELECT ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen
+                FROM trusted_peers WHERE ip = ?
+            """, (ip,))
             return cursor.fetchone()
 
     def get_peer_permissions(self, ip: str) -> dict:
-        """Fetch granular permissions for a peer IP."""
-        with self.lock:
-            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
-            row = cursor.fetchone()
-            if row:
-                return {
-                    'can_chat': bool(row[0]),
-                    'can_list_files': bool(row[1]),
-                    'can_download_files': bool(row[2]),
-                    'is_blocked': bool(row[3])
-                }
-            # Default for unknown peers
-            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
+        """Returns a dictionary of permissions for the given peer IP."""
+        peer = self.get_trusted_peer(ip)
+        if not peer:
+            # Default permissions for new/unknown peers
+            return {
+                'is_blocked': 0,
+                'can_chat': 1,
+                'can_list_files': 1,
+                'can_download_files': 1
+            }
+        return {
+            'is_blocked': peer[4],
+            'can_chat': peer[5],
+            'can_list_files': peer[6],
+            'can_download_files': peer[7]
+        }
 
-    def update_peer_permissions(self, ip: str, perms: dict):
-        """Update granular permissions for a peer."""
+    def update_peer_permissions(self, ip: str, permissions: dict):
+        """Updates granular permissions for a peer."""
         with self.lock:
             with self.conn:
                 self.conn.execute("""
-                    UPDATE trusted_peers SET
-                        can_chat = ?,
-                        can_list_files = ?,
-                        can_download_files = ?,
-                        is_blocked = ?
+                    UPDATE trusted_peers
+                    SET is_blocked = ?, can_chat = ?, can_list_files = ?, can_download_files = ?
                     WHERE ip = ?
-                """, (int(perms.get('can_chat', True)),
-                      int(perms.get('can_list_files', True)),
-                      int(perms.get('can_download_files', True)),
-                      int(perms.get('is_blocked', False)),
-                      ip))
+                """, (
+                    permissions.get('is_blocked', 0),
+                    permissions.get('can_chat', 1),
+                    permissions.get('can_list_files', 1),
+                    permissions.get('can_download_files', 1),
+                    ip
+                ))
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         """Batch fetch trust levels for multiple IPs to reduce DB roundtrips."""

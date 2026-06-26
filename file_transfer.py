@@ -107,6 +107,13 @@ class FileTransferManager:
                 client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())
                 return
 
+            # Check if peer is blocked
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                if logger: logger.log("SECURITY_ALERT", f"File transfer connection from blocked peer {addr[0]} rejected.")
+                client.sendall(json.dumps({'status': 'ERR', 'msg': 'Peer is blocked'}).encode())
+                return
+
             header_raw = client.recv(4096).decode()
             if not header_raw:
                 return
@@ -150,9 +157,9 @@ class FileTransferManager:
                 self.receive_stream(client, filename, size)
 
             elif cmd == 'PULL_FILE':
-                if not perms.get('can_download_files', True):
-                    if logger: logger.log("SECURITY_ALERT", f"Blocked PULL_FILE from {addr[0]}: Permission denied.")
-                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Permission denied'}).encode())
+                if not perms.get('can_download_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked PULL_FILE from peer {addr[0]}: Download disabled.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Download disabled'}).encode())
                     return
 
                 path = req.get('path')
@@ -188,11 +195,10 @@ class FileTransferManager:
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'File not found or expired'}).encode())
 
             elif cmd == 'LIST_SHARED':
-                if not perms.get('can_list_files', True):
-                    if logger: logger.log("SECURITY_ALERT", f"Blocked LIST_SHARED from {addr[0]}: Permission denied.")
-                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Permission denied'}).encode())
+                if not perms.get('can_list_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked LIST_SHARED from peer {addr[0]}: Listing disabled.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Listing disabled'}).encode())
                     return
-
                 files = self.db.get_files()
                 file_list = []
                 for f in files:
@@ -211,11 +217,10 @@ class FileTransferManager:
                 client.sendall(data_encoded)
 
             elif cmd == 'LIST_FOLDER':
-                if not perms.get('can_download_files', True):
-                    if logger: logger.log("SECURITY_ALERT", f"Blocked LIST_FOLDER from {addr[0]}: Permission denied.")
-                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Permission denied'}).encode())
+                if not perms.get('can_list_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked LIST_FOLDER from peer {addr[0]}: Listing disabled.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Listing disabled'}).encode())
                     return
-
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 path_str = req.get('path')
                 if not isinstance(path_str, str):
