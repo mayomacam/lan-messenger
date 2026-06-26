@@ -462,8 +462,7 @@ class LANMessengerApp(ctk.CTk):
             lbl.pack(pady=20)
 
         for ip, name in self.peers.items():
-            perms = self.db.get_peer_permissions(ip)
-            is_blocked = perms.get('is_blocked', False)
+            is_blocked = peer_perms.get(ip, False)
 
             row = ctk.CTkFrame(self.peers_scroll, fg_color="#333333" if is_blocked else None)
             row.pack(fill="x", pady=2)
