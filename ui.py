@@ -140,7 +140,21 @@ class LANMessengerApp(ctk.CTk):
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
         self.reaper_thread.start()
 
+    def _refresh_after_reap(self, msg_count):
+        """Thread-safe UI refresh after background reaping."""
+        if not self.winfo_exists():
+            return
+        if msg_count > 0:
+            self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
+            # Only refresh visible chat tabs to save resources
+            current_tab = self.tabview.get()
+            if current_tab == "Global Chat":
+                self.load_chat_history(debounce=True)
+            elif current_tab.startswith("Chat: "):
+                if self.current_private_peer:
+                    self.load_private_chat(self.current_private_peer)
     def message_reaper_loop(self):
+        """Background thread for periodic database maintenance (runs every 15s)."""
         while True:
             try:
                 # Reap messages
@@ -195,7 +209,7 @@ class LANMessengerApp(ctk.CTk):
             if is_new_peer:
                 self.executor.submit(self.network.send_hello, ip, self.username)
         elif event_type == 'MSG':
-             self.load_chat_history()
+             self.load_chat_history(debounce=True)
         elif event_type == 'MSG_PRIV':
              # args: (msg_id, sender, content, peer_ip)
              peer_ip = args[3]
@@ -205,7 +219,7 @@ class LANMessengerApp(ctk.CTk):
                  sender_name = self.peers.get(peer_ip, args[1])
                  self.open_private_chat(peer_ip, sender_name)
         elif event_type in ['EDIT', 'DELETE']:
-             self.load_chat_history()
+             self.load_chat_history(debounce=True)
         elif event_type == 'SECURITY_ALERT':
              msg = args[0]
              messagebox.showwarning("Security Alert", msg)
@@ -586,7 +600,7 @@ class LANMessengerApp(ctk.CTk):
                 pass
             self._chat_history_after_id = None
         self.search_entry.delete(0, "end")
-        self.load_chat_history()
+        self.load_chat_history(debounce=False)
         self.search_entry.focus_set()
 
     def load_chat_history(self, debounce=True):
