@@ -4,24 +4,39 @@ import os
 import json
 import time
 import hashlib
+import functools
 from pathlib import Path
 from ssl_utils import wrap_socket, get_peer_fingerprint
 import audit
 
+@functools.lru_cache(maxsize=1024)
+def _calculate_sha256_cached(filepath, mtime, size):
+    """Internal cached helper for file hashing."""
+    sha256_hash = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        # Read and update hash string value in blocks of 64K
+        for byte_block in iter(lambda: f.read(65536), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
 class FileTransferManager:
     @staticmethod
     def calculate_sha256(filepath):
-        """Calculate the SHA-256 hash of a file."""
-        sha256_hash = hashlib.sha256()
+        """Calculate the SHA-256 hash of a file with caching based on metadata."""
         try:
-            with open(filepath, "rb") as f:
-                # Read and update hash string value in blocks of 64K
-                for byte_block in iter(lambda: f.read(65536), b""):
-                    sha256_hash.update(byte_block)
-            return sha256_hash.hexdigest()
+            stat = os.stat(filepath)
+            return _calculate_sha256_cached(filepath, stat.st_mtime, stat.st_size)
         except Exception as e:
-            print(f"[DEBUG] Error calculating hash for {filepath}: {e}")
-            return None
+            # Fallback for errors in stat or cached function
+            try:
+                sha256_hash = hashlib.sha256()
+                with open(filepath, "rb") as f:
+                    for byte_block in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(byte_block)
+                return sha256_hash.hexdigest()
+            except Exception as e2:
+                print(f"[DEBUG] Error calculating hash for {filepath}: {e2}")
+                return None
 
     def __init__(self, db, port, save_dir="downloads", bind_ip="0.0.0.0", auth_token=None, allowed_ips=None):
         """Initialize the file transfer manager.
