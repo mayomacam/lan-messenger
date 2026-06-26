@@ -239,6 +239,13 @@ class FileTransferManager:
                 if not isinstance(path_str, str):
                     if logger: logger.log("SECURITY_ALERT", f"Malformed LIST_FOLDER request from {addr[0]}: path must be a string.")
                     return
+
+                # Security: Check if folder is actually shared
+                if not self.db.is_file_shared(path_str):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized LIST_FOLDER request from {addr[0]}: {path_str}")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
+                    return
+
                 base_path = Path(path_str)
                 if base_path.exists() and base_path.is_dir():
                     entries = []

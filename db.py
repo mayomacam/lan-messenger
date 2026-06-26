@@ -267,18 +267,28 @@ class Database:
         return decrypted_rows
 
     def is_file_shared(self, path: str) -> bool:
-        """Check if a file path is currently shared and not expired."""
+        """Check if a file path is currently shared and not expired.
+        Supports checking if a file is within a shared folder.
+        """
         now = time.time()
         with self.lock:
-            # Fetch only the path column to reduce data transfer and decryption overhead
-            cursor = self.conn.execute("SELECT path FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
+            cursor = self.conn.execute("SELECT path, is_folder FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,))
             rows = cursor.fetchall()
 
-        # Check outside the lock; early exit when match is found
+        # Check outside the lock
+        norm_path = os.path.normpath(path)
         for row in rows:
-            decrypted_path = self.cipher.decrypt(row[0])
-            if decrypted_path == path:
-                return True
+            decrypted_shared_path = self.cipher.decrypt(row[0])
+            is_folder = row[1]
+            norm_shared = os.path.normpath(decrypted_shared_path)
+
+            if is_folder:
+                # Check if path is inside this folder
+                if norm_path == norm_shared or norm_path.startswith(norm_shared + os.sep):
+                    return True
+            else:
+                if norm_path == norm_shared:
+                    return True
         return False
 
     def delete_expired_files(self) -> int:
@@ -413,6 +423,37 @@ class Database:
         with self.lock:
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
+
+    def get_peer_permissions(self, ip: str) -> dict:
+        with self.lock:
+            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'can_chat': bool(row[0]),
+                    'can_list_files': bool(row[1]),
+                    'can_download_files': bool(row[2]),
+                    'is_blocked': bool(row[3])
+                }
+            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
+
+    def update_peer_permissions(self, ip: str, perms: dict):
+        with self.lock:
+            with self.conn:
+                self.conn.execute("""
+                    UPDATE trusted_peers SET
+                        can_chat = ?, can_list_files = ?, can_download_files = ?, is_blocked = ?
+                    WHERE ip = ?
+                """, (int(perms.get('can_chat', True)),
+                      int(perms.get('can_list_files', True)),
+                      int(perms.get('can_download_files', True)),
+                      int(perms.get('is_blocked', False)), ip))
+
+    def is_peer_blocked(self, ip: str) -> bool:
+        with self.lock:
+            cursor = self.conn.execute("SELECT is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+            return bool(row[0]) if row else False
 
     def add_audit_log(self, event_type: str, details: str):
         timestamp = time.time()
