@@ -524,6 +524,11 @@ class LANMessengerApp(ctk.CTk):
             self._search_after_id = self.after(ms, lambda: self.load_chat_history(debounce=False))
             return
 
+        if self._search_after_id:
+            try:
+                self.after_cancel(self._search_after_id)
+            except Exception:
+                pass
         self._search_after_id = None
         query = self.search_entry.get().strip().lower()
         self._last_search_query = query
