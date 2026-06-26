@@ -351,7 +351,10 @@ class LANMessengerApp(ctk.CTk):
 
         # Visual feedback
         self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
-        self.after(2000, lambda: self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5")))
+        def reset_audit_btn():
+            if self.refresh_audit_btn.winfo_exists():
+                self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(2000, reset_audit_btn)
 
     def update_username(self, event=None):
         new_name = self.username_entry.get().strip()
