@@ -34,6 +34,6 @@
 **Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
 **Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
 
-## 2025-05-24 - [Thread-Safe UI Updates and Unified Debouncing]
-**Learning:** Background threads in Tkinter must never access UI widgets directly (e.g., 'tabview.get()'), as this causes intermittent crashes. Additionally, using multiple inconsistent timers for debouncing leads to redundant code and race conditions.
-**Action:** Always use 'self.after(0, ...)' to bridge background tasks to the main thread. Centralize debouncing into the primary data-loading method with a default-off 'debounce' parameter to maintain responsiveness for direct UI actions while protecting against bursts.
+## 2025-05-24 - [UI Refresh Cycles with Debouncing and Lazy Loading]
+**Learning:** Polling loops and unconditioned UI updates (e.g., refreshing all chat tabs when only one is visible) are major performance sinks in GUI apps. Implementing visibility checks (lazy loading) and debouncing (throttling) ensures that CPU-intensive rendering and database queries only occur when necessary.
+**Action:** Always check widget visibility or tab state before performing heavy UI updates. Use a standard debounce pattern (e.g., 100ms) for high-frequency events to prevent UI lag.
