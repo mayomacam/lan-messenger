@@ -493,7 +493,10 @@ class LANMessengerApp(ctk.CTk):
 
     def clear_search(self):
         if self._chat_history_after_id:
-            self.after_cancel(self._chat_history_after_id)
+            try:
+                self.after_cancel(self._chat_history_after_id)
+            except Exception:
+                pass
             self._chat_history_after_id = None
         self.search_entry.delete(0, "end")
         self.load_chat_history()
