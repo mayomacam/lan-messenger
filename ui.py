@@ -665,7 +665,7 @@ class LANMessengerApp(ctk.CTk):
 
     def load_private_chat(self, peer_ip, debounce=True):
         """Debounced private chat refresh with batched insertions."""
-        if not self.winfo_exists() or peer_ip not in self.private_chats:
+        if not self.winfo_exists() or not self.tabview.winfo_exists() or peer_ip not in self.private_chats:
             return
 
         # Lazy loading: only update if this chat is currently visible
