@@ -441,7 +441,7 @@ class LANMessengerApp(ctk.CTk):
 
         # Prevent unnecessary UI rebuilds using snapshot comparison
         # Also include blocked status in snapshot
-        all_perms = {ip: self.db.get_peer_permissions(ip) for ip in self.peers}
+        all_perms = self.db.get_peers_permissions(list(self.peers.keys()))
         current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust, "perms": all_perms}, sort_keys=True)
         if current_snapshot == self._last_peers_snapshot:
             self.after(2000, self.refresh_peers)
