@@ -278,8 +278,10 @@ class Database:
             if is_folder:
                 # Support prefix matching for folder contents
                 try:
-                    # Ensure path is within the shared folder and not a partial match of folder name
-                    if os.path.commonpath([decrypted_path, path]) == decrypted_path:
+                    # Normalize paths to handle trailing slashes and relative segments consistently
+                    norm_shared = os.path.normpath(decrypted_path)
+                    norm_path = os.path.normpath(path)
+                    if os.path.commonpath([norm_shared, norm_path]) == norm_shared:
                         return True
                 except Exception:
                     pass
