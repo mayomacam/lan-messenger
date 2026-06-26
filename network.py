@@ -170,10 +170,13 @@ class NetworkManager:
             try:
                 client, addr = self.server_sock.accept()
 
-                # Pre-TLS check: Drop connection immediately if peer is blocked
+                # Fast check for blocked peers before even doing TLS
                 perms = self.db.get_peer_permissions(addr[0])
                 if perms.get('is_blocked'):
-                    print(f"[DEBUG] Blocking connection from {addr[0]} (is_blocked=1)")
+                    logger = audit.get_logger()
+                    msg = f"Connection from {addr[0]} rejected: Peer is blocked (pre-TLS)."
+                    print(f"[DEBUG] {msg}")
+                    if logger: logger.log("SECURITY_ALERT", msg)
                     client.close()
                     continue
 
@@ -271,12 +274,31 @@ class NetworkManager:
         logger = audit.get_logger()
         try:
             client.settimeout(10)
+
+            # Security check: granular permissions (is_blocked)
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                msg = f"Connection from {addr[0]} rejected: Peer is blocked."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                self._send_json(client, {'status': 'ERR', 'msg': 'Access denied: Blocked'})
+                return
+
             # IP whitelist enforcement
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 msg = f"Connection from {addr[0]} rejected: IP not allowed."
                 print(f"[DEBUG] {msg}")
                 if logger: logger.log("SECURITY_ALERT", msg)
                 self._send_json(client, {'status': 'ERR', 'msg': 'IP not allowed'})
+                return
+
+            # Check if peer is blocked
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                msg = f"Connection from blocked peer {addr[0]} rejected."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                self._send_json(client, {'status': 'ERR', 'msg': 'Peer is blocked'})
                 return
 
             data = self._recv_json(client)
@@ -322,6 +344,9 @@ class NetworkManager:
                 if self.callback: self.callback('NEW_PEER', addr[0], sender_username)
 
             elif msg_type == 'MSG':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG from peer {addr[0]}: Chat disabled.")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -334,6 +359,9 @@ class NetworkManager:
                 if self.callback: self.callback('MSG', msg_id, sender, content)
 
             elif msg_type == 'MSG_PRIV':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_PRIV from peer {addr[0]}: Chat disabled.")
+                    return
                 sender = data.get('sender')
                 content = data.get('content')
                 msg_id = data.get('id')
@@ -347,6 +375,9 @@ class NetworkManager:
                 if self.callback: self.callback('MSG_PRIV', msg_id, sender, content, addr[0])
 
             elif msg_type == 'MSG_EDIT':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_EDIT from peer {addr[0]}: Chat disabled.")
+                    return
                 msg_id = data.get('id')
                 new_content = data.get('content')
                 if not all(isinstance(x, str) for x in [msg_id, new_content]):
@@ -355,6 +386,9 @@ class NetworkManager:
                 if self.callback: self.callback('EDIT', msg_id, new_content)
 
             elif msg_type == 'MSG_DEL':
+                if not perms.get('can_chat'):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked MSG_DEL from peer {addr[0]}: Chat disabled.")
+                    return
                 msg_id = data.get('id')
                 if not isinstance(msg_id, str): return
                 self.db.delete_message(msg_id)

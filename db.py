@@ -122,7 +122,7 @@ class Database:
             if 'expires_at' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN expires_at REAL")
 
-            # Trusted Peers table: ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked
+            # Trusted Peers table: ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen
             # New installations use this schema
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trusted_peers (
@@ -130,11 +130,11 @@ class Database:
                     username TEXT,
                     fingerprint TEXT,
                     trust_level TEXT DEFAULT 'untrusted',
-                    last_seen REAL,
+                    is_blocked BOOLEAN DEFAULT 0,
                     can_chat BOOLEAN DEFAULT 1,
                     can_list_files BOOLEAN DEFAULT 1,
                     can_download_files BOOLEAN DEFAULT 1,
-                    is_blocked BOOLEAN DEFAULT 0
+                    last_seen REAL
                 )
             """)
             # Migration for existing installations
@@ -144,6 +144,18 @@ class Database:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
             if 'trust_level' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN trust_level TEXT DEFAULT 'untrusted'")
+
+            # New granular permission columns
+            if 'is_blocked' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_blocked BOOLEAN DEFAULT 0")
+            if 'can_chat' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_chat BOOLEAN DEFAULT 1")
+            if 'can_list_files' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_list_files BOOLEAN DEFAULT 1")
+            if 'can_download_files' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files BOOLEAN DEFAULT 1")
+
+            # Granular permissions migration
             if 'can_chat' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_chat BOOLEAN DEFAULT 1")
             if 'can_list_files' not in tp_columns:
@@ -162,6 +174,10 @@ class Database:
                     timestamp REAL NOT NULL
                 )
             """)
+            # Index to speed up ORDER BY timestamp DESC queries
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)")
+
+
             self.conn.commit()
 
     def add_message(self, sender: str, content: str, recipient: str = None, ttl: int = None) -> str:
@@ -282,45 +298,50 @@ class Database:
                 cursor = self.conn.execute("DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
                 return cursor.rowcount
 
-    def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = 'untrusted'):
+    def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = None):
         now = time.time()
         with self.lock:
             with self.conn:
-                self.conn.execute("""
-                    INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(ip) DO UPDATE SET
-                        username=excluded.username,
-                        fingerprint=excluded.fingerprint,
-                        trust_level=excluded.trust_level,
-                        last_seen=excluded.last_seen
-                """, (ip, username, fingerprint, trust_level, now))
+                # Check if peer exists to preserve permissions and trust level
+                cursor = self.conn.execute("SELECT trust_level, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+                row = cursor.fetchone()
 
-    def get_trusted_peer(self, ip: str) -> Tuple:
-        with self.lock:
-            # Explicitly select columns to handle schema variations gracefully
-            cursor = self.conn.execute("SELECT ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
-            return cursor.fetchone()
+                if row:
+                    # Use existing trust level if none provided
+                    final_trust = trust_level if trust_level is not None else row[0]
+                    # Update while preserving permissions
+                    self.conn.execute("""
+                        UPDATE trusted_peers SET
+                            username = ?,
+                            fingerprint = ?,
+                            trust_level = ?,
+                            last_seen = ?
+                        WHERE ip = ?
+                    """, (username, fingerprint, final_trust, now, ip))
+                else:
+                    # Insert new with defaults
+                    final_trust = trust_level if trust_level is not None else 'untrusted'
+                    self.conn.execute("""
+                        INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked)
+                        VALUES (?, ?, ?, ?, ?, 1, 1, 1, 0)
+                    """, (ip, username, fingerprint, final_trust, now))
 
     def get_peer_permissions(self, ip: str) -> dict:
-        """Fetch granular permissions for a peer."""
-        peer = self.get_trusted_peer(ip)
-        if not peer:
-            return {
-                'can_chat': True,
-                'can_list_files': True,
-                'can_download_files': True,
-                'is_blocked': False
-            }
-        # peer: (ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked)
-        return {
-            'can_chat': bool(peer[5]),
-            'can_list_files': bool(peer[6]),
-            'can_download_files': bool(peer[7]),
-            'is_blocked': bool(peer[8])
-        }
+        """Returns a dictionary of peer permissions."""
+        with self.lock:
+            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'can_chat': bool(row[0]),
+                    'can_list_files': bool(row[1]),
+                    'can_download_files': bool(row[2]),
+                    'is_blocked': bool(row[3])
+                }
+            # Default for unknown peers
+            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
 
-    def update_peer_permissions(self, ip: str, perms: dict):
+    def update_peer_permissions(self, ip: str, permissions_dict: dict):
         """Update granular permissions for a peer."""
         with self.lock:
             with self.conn:
@@ -328,8 +349,56 @@ class Database:
                     UPDATE trusted_peers
                     SET can_chat = ?, can_list_files = ?, can_download_files = ?, is_blocked = ?
                     WHERE ip = ?
-                """, (perms.get('can_chat', True), perms.get('can_list_files', True),
-                      perms.get('can_download_files', True), perms.get('is_blocked', False), ip))
+                """, (
+                    int(permissions_dict.get('can_chat', True)),
+                    int(permissions_dict.get('can_list_files', True)),
+                    int(permissions_dict.get('can_download_files', True)),
+                    int(permissions_dict.get('is_blocked', False)),
+                    ip
+                ))
+
+    def get_trusted_peer(self, ip: str) -> Tuple:
+        with self.lock:
+            # Explicitly select columns to handle schema variations gracefully
+            cursor = self.conn.execute("""
+                SELECT ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen
+                FROM trusted_peers WHERE ip = ?
+            """, (ip,))
+            return cursor.fetchone()
+
+    def get_peer_permissions(self, ip: str) -> dict:
+        """Returns a dictionary of permissions for the given peer IP."""
+        peer = self.get_trusted_peer(ip)
+        if not peer:
+            # Default permissions for new/unknown peers
+            return {
+                'is_blocked': 0,
+                'can_chat': 1,
+                'can_list_files': 1,
+                'can_download_files': 1
+            }
+        return {
+            'is_blocked': peer[4],
+            'can_chat': peer[5],
+            'can_list_files': peer[6],
+            'can_download_files': peer[7]
+        }
+
+    def update_peer_permissions(self, ip: str, permissions: dict):
+        """Updates granular permissions for a peer."""
+        with self.lock:
+            with self.conn:
+                self.conn.execute("""
+                    UPDATE trusted_peers
+                    SET is_blocked = ?, can_chat = ?, can_list_files = ?, can_download_files = ?
+                    WHERE ip = ?
+                """, (
+                    permissions.get('is_blocked', 0),
+                    permissions.get('can_chat', 1),
+                    permissions.get('can_list_files', 1),
+                    permissions.get('can_download_files', 1),
+                    ip
+                ))
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         """Batch fetch trust levels for multiple IPs to reduce DB roundtrips."""
@@ -349,9 +418,12 @@ class Database:
     def add_audit_log(self, event_type: str, details: str):
         timestamp = time.time()
         with self.lock:
-            with self.conn:
-                self.conn.execute("INSERT INTO audit_logs (event_type, details, timestamp) VALUES (?, ?, ?)",
-                                 (event_type, details, timestamp))
+            try:
+                with self.conn:
+                    self.conn.execute("INSERT INTO audit_logs (event_type, details, timestamp) VALUES (?, ?, ?)",
+                                     (event_type, details, timestamp))
+            except Exception as e:
+                print(f"[DEBUG] Failed to add audit log to DB: {e}")
 
     def get_audit_logs(self, limit=100) -> List[Tuple]:
         with self.lock:
