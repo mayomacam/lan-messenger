@@ -103,8 +103,9 @@ class LANMessengerApp(ctk.CTk):
         if current_tab == "Global Chat":
             self.load_chat_history()
         elif current_tab.startswith("Chat: "):
-            if self.current_private_peer:
-                self.load_private_chat(self.current_private_peer)
+            peer_ip = self.private_chat_tabs.get(current_tab)
+            if peer_ip:
+                self.load_private_chat(peer_ip)
         elif current_tab == "Files" and self.current_file_view_source == "Local":
             self.refresh_files_view()
 
