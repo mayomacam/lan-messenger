@@ -171,10 +171,15 @@ class LANMessengerApp(ctk.CTk):
 
                 # Reap files
                 file_count = self.db.delete_expired_files()
-                if file_count > 0:
-                    self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
-                    if self.current_file_view_source == "Local":
-                        self.after(0, self.refresh_files_view)
+
+                if msg_count > 0 or file_count > 0:
+                    if msg_count > 0:
+                        self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
+                    if file_count > 0:
+                        self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
+
+                    # Schedule UI refresh on main thread
+                    self.after(0, self._refresh_after_reap)
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
             time.sleep(15)
@@ -403,6 +408,8 @@ class LANMessengerApp(ctk.CTk):
         self.after(2000, reset)
 
     def load_audit_logs(self):
+        if not self.winfo_exists() or self.tabview.get() != "Audit Logs":
+            return
         logs = self.db.get_audit_logs(200)
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
@@ -643,6 +650,8 @@ class LANMessengerApp(ctk.CTk):
         self._last_search_query = self.search_entry.get().strip().lower()
 
         query = self.search_entry.get().strip().lower()
+        self._last_search_query = query
+
         messages = self.db.get_messages(200)
         self.chat_display.configure(state="normal")
         self.chat_display.delete("1.0", "end")
@@ -778,7 +787,6 @@ class LANMessengerApp(ctk.CTk):
         """Debounced private chat refresh with batched insertions and lazy loading."""
         if not self.winfo_exists():
             return
-        if peer_ip not in self.private_chats: return
 
         # Lazy loading: only update if this peer's tab is currently visible
         current_tab = self.tabview.get()

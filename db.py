@@ -95,7 +95,6 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient_deleted_ts ON messages(recipient, is_deleted, timestamp)")
             # Index for expiring messages
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at)")
-
             # Drop old less efficient indexes
             cursor.execute("DROP INDEX IF EXISTS idx_messages_deleted_timestamp")
             cursor.execute("DROP INDEX IF EXISTS idx_messages_recipient")
