@@ -357,6 +357,11 @@ class Database:
         """Update granular permissions for a peer."""
         with self.lock:
             with self.conn:
+                # Ensure the peer exists in the trusted_peers table first
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO trusted_peers (ip, username, fingerprint, trust_level) VALUES (?, ?, ?, ?)",
+                    (ip, "Unknown", "", "untrusted")
+                )
                 # Build update query dynamically
                 fields = []
                 values = []
