@@ -1157,6 +1157,8 @@ class PeerSecurityDialog(ctk.CTkToplevel):
         self.db.update_peer_permissions(self.ip, new_perms)
         if self.logger:
             self.logger.log("SECURITY_POLICY_CHANGE", f"Updated permissions for {self.peer_name} ({self.ip}): {new_perms}")
+        if hasattr(self.master, 'refresh_peers'):
+            self.master.refresh_peers()
         self.destroy()
 
 if __name__ == "__main__":
