@@ -668,6 +668,9 @@ class LANMessengerApp(ctk.CTk):
         if val == "1d": return 86400
         return None
 
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, self.db, ip, name, self.refresh_peers)
+
     def send_message(self, event=None):
         msg = self.msg_entry.get()
         if not msg: return

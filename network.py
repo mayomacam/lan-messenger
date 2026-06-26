@@ -169,6 +169,17 @@ class NetworkManager:
         while self.running:
             try:
                 client, addr = self.server_sock.accept()
+
+                # Fast check for blocked peers before even doing TLS
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    logger = audit.get_logger()
+                    msg = f"Connection from {addr[0]} rejected: Peer is blocked (pre-TLS)."
+                    print(f"[DEBUG] {msg}")
+                    if logger: logger.log("SECURITY_ALERT", msg)
+                    client.close()
+                    continue
+
                 # Wrap with TLS
                 client = wrap_socket(client, server_side=True)
 
