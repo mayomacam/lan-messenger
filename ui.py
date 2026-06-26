@@ -477,11 +477,14 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
-        lines = []
-        for log in logs:
-            # log: (id, event_type, details, timestamp)
-            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-            lines.append(f"[{ts}] {log[1]}: {log[2]}")
+        if not logs:
+            self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+        else:
+            for log in logs:
+                # log: (id, event_type, details, timestamp)
+                event_type = log[1]
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+                line = f"[{ts}] {event_type}: {log[2]}\n"
 
         if lines:
             self.audit_display.insert("end", "\n".join(lines) + "\n")
@@ -490,7 +493,7 @@ class LANMessengerApp(ctk.CTk):
             self.audit_display.tag_config("center", justify='center')
 
         self.audit_display.configure(state="disabled")
-        self.audit_display.see("end")
+        self.audit_display.see("1.0")
 
         # Visual feedback
         self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
@@ -766,21 +769,19 @@ class LANMessengerApp(ctk.CTk):
         if not msg: return
         ttl = self._get_ttl_seconds()
 
-        expires_at = (time.time() + ttl) if ttl else None
-
         # If we are in a private chat tab, send private message
         current_tab = self.tabview.get()
         if current_tab.startswith("Chat: "):
             peer_ip = self.current_private_peer
             if peer_ip:
-                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, expires_at=expires_at)
+                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, ttl=ttl)
                 threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True, ttl)).start()
                 self.msg_entry.delete(0, "end")
                 self.load_private_chat(peer_ip)
                 return
 
         # Otherwise send global message
-        msg_id = self.db.add_message(self.username, msg, expires_at=expires_at)
+        msg_id = self.db.add_message(self.username, msg, ttl=ttl)
         for ip in self.peers:
             self.executor.submit(self.network.send_message, ip, self.username, msg, msg_id, False, ttl)
 
@@ -830,9 +831,7 @@ class LANMessengerApp(ctk.CTk):
                 # Get TTL
                 ttl_sec = self._get_ttl_seconds(var=tvar)
 
-                exp_at = (time.time() + ttl_sec) if ttl_sec else None
-
-                mid = self.db.add_message(self.username, m, recipient=i, expires_at=exp_at)
+                mid = self.db.add_message(self.username, m, recipient=i, ttl=ttl_sec)
                 threading.Thread(target=self.network.send_message, args=(i, self.username, m, mid, True, ttl_sec)).start()
                 ent.delete(0, "end")
                 self.load_private_chat(i)
