@@ -97,6 +97,8 @@ class LANMessengerApp(ctk.CTk):
 
     def _refresh_after_reap(self, msg_count):
         """Thread-safe UI refresh after background reaping."""
+        if not self.winfo_exists():
+            return
         if msg_count > 0:
             self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
             # Only refresh visible chat tabs to save resources
@@ -106,7 +108,6 @@ class LANMessengerApp(ctk.CTk):
             elif current_tab.startswith("Chat: "):
                 if self.current_private_peer:
                     self.load_private_chat(self.current_private_peer)
-
     def message_reaper_loop(self):
         """Background thread for periodic database maintenance (runs every 15s)."""
         while True:
