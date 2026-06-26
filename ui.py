@@ -474,7 +474,7 @@ class LANMessengerApp(ctk.CTk):
         tab = self.tabview.get()
         if tab == "Global Chat":
             self.msg_entry.focus_set()
-            self.load_chat_history()
+            self.load_chat_history(debounce=False)
         elif tab == "Audit Logs":
             self.load_audit_logs()
         elif tab.startswith("Chat: "):
