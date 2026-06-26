@@ -117,15 +117,16 @@ class LANMessengerApp(ctk.CTk):
 
     def _refresh_after_reap(self):
         """Thread-safe UI refresh after data is reaped, with visibility checks."""
-        if not self.winfo_exists():
+        if not self.winfo_exists() or not self.tabview.winfo_exists():
             return
 
         current_tab = self.tabview.get()
         if current_tab == "Global Chat":
             self.load_chat_history()
         elif current_tab.startswith("Chat: "):
-            if self.current_private_peer:
-                self.load_private_chat(self.current_private_peer)
+            peer_ip = self.private_chat_tabs.get(current_tab)
+            if peer_ip:
+                self.load_private_chat(peer_ip)
         elif current_tab == "Files" and self.current_file_view_source == "Local":
             self.refresh_files_view()
 
