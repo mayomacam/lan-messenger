@@ -57,9 +57,10 @@ class FileTransferManager:
             try:
                 client, addr = self.server_socket.accept()
 
-                # Proactive security: drop blocked IPs before TLS handshake
-                if self.db.is_peer_blocked(addr[0]):
-                    print(f"[SECURITY] DROPPING file connection from blocked peer: {addr[0]}")
+                # Pre-TLS check: Drop connection immediately if peer is blocked
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    print(f"[DEBUG] Blocking file connection from {addr[0]} (is_blocked=1)")
                     client.close()
                     continue
 
@@ -95,22 +96,30 @@ class FileTransferManager:
 
     def handle_client(self, client, addr):
         """Handle a client connection.
-        Includes optional IP whitelist enforcement.
+        Includes optional IP whitelist enforcement and granular permissions.
         """
         logger = audit.get_logger()
         try:
             client.settimeout(10)
 
-            # Security: Get peer permissions
+            # Security check: granular permissions (is_blocked)
             perms = self.db.get_peer_permissions(addr[0])
             if perms.get('is_blocked'):
-                 if logger: logger.log("SECURITY_ALERT", f"Dropped file request from blocked peer {addr[0]}")
-                 return
+                if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: Peer is blocked.")
+                client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied: Blocked'}).encode())
+                return
 
             # IP whitelist check
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: IP not allowed.")
                 client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())
+                return
+
+            # Check if peer is blocked
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                if logger: logger.log("SECURITY_ALERT", f"File transfer connection from blocked peer {addr[0]} rejected.")
+                client.sendall(json.dumps({'status': 'ERR', 'msg': 'Peer is blocked'}).encode())
                 return
 
             header_raw = client.recv(4096).decode()
@@ -137,11 +146,20 @@ class FileTransferManager:
             cmd = req.get('cmd')
             if not isinstance(cmd, str): return
 
+            # Granular permission check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                return
+
             if cmd == 'PUSH_FILE':
-                if not perms.get('can_download_files'): # They are "pushing" but we consider it file activity
-                     if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized PUSH_FILE from {addr[0]}")
-                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
-                     return
+                # Enforce can_download_files (peer pushing to us is like we downloading from them,
+                # but in this protocol PUSH_FILE is used for unsolicited sends.
+                # Let's use can_download_files as a general 'file receive' permission here.
+                if not perms.get('can_download_files', True):
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked PUSH_FILE from {addr[0]}: Permission denied.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Permission denied'}).encode())
+                    return
+
                 filename = req.get('filename')
                 size = req.get('size')
                 if not isinstance(filename, str) or not isinstance(size, int): return
@@ -153,9 +171,9 @@ class FileTransferManager:
 
             elif cmd == 'PULL_FILE':
                 if not perms.get('can_download_files'):
-                     if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized PULL_FILE from {addr[0]}")
-                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
-                     return
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked PULL_FILE from peer {addr[0]}: Download disabled.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Download disabled'}).encode())
+                    return
 
                 path = req.get('path')
                 if not isinstance(path, str):
@@ -172,7 +190,6 @@ class FileTransferManager:
                 if ".." in path:
                     if logger: logger.log("SECURITY_ALERT", f"Blocked potential directory traversal attempt from {addr[0]}: {path}")
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
-                    return
                     return
 
                 if os.path.exists(path) and os.path.isfile(path):
@@ -192,9 +209,9 @@ class FileTransferManager:
 
             elif cmd == 'LIST_SHARED':
                 if not perms.get('can_list_files'):
-                     if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized LIST_SHARED from {addr[0]}")
-                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
-                     return
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked LIST_SHARED from peer {addr[0]}: Listing disabled.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Listing disabled'}).encode())
+                    return
                 files = self.db.get_files()
                 file_list = []
                 for f in files:
@@ -214,10 +231,9 @@ class FileTransferManager:
 
             elif cmd == 'LIST_FOLDER':
                 if not perms.get('can_list_files'):
-                     if logger: logger.log("SECURITY_ALERT", f"Blocked unauthorized LIST_FOLDER from {addr[0]}")
-                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
-                     return
-
+                    if logger: logger.log("SECURITY_ALERT", f"Blocked LIST_FOLDER from peer {addr[0]}: Listing disabled.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Listing disabled'}).encode())
+                    return
                 # Use pathlib for OS‑independent path handling and include directories in the listing
                 path_str = req.get('path')
                 if not isinstance(path_str, str):

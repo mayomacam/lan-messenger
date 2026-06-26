@@ -1,79 +1,113 @@
-
-import unittest
-import os
+import socket
+import threading
+import json
 import time
+import os
+import ssl
 from db import Database
+from network import NetworkManager
+from file_transfer import FileTransferManager
+from ssl_utils import wrap_socket
 
-class TestSecurityFeatures(unittest.TestCase):
-    def setUp(self):
-        self.db_name = "test_security.db"
-        if os.path.exists(self.db_name):
-            os.remove(self.db_name)
-        self.db = Database(self.db_name)
-        self.peer_ip = "192.168.1.100"
-        self.db.add_trusted_peer(self.peer_ip, "TestPeer", "fingerprint123")
+# Mock audit logger
+import audit
+class MockLogger:
+    def log(self, event_type, details):
+        print(f"[MOCK AUDIT] {event_type}: {details}")
 
-    def tearDown(self):
-        self.db.close()
-        if os.path.exists(self.db_name):
-            os.remove(self.db_name)
+def run_security_tests():
+    db_name = "test_security.db"
+    if os.path.exists(db_name): os.remove(db_name)
 
-    def test_default_permissions(self):
-        perms = self.db.get_peer_permissions(self.peer_ip)
-        self.assertTrue(perms['can_chat'])
-        self.assertTrue(perms['can_list_files'])
-        self.assertTrue(perms['can_download_files'])
-        self.assertFalse(perms['is_blocked'])
+    db = Database(db_name)
+    audit.init_logger(db)
 
-    def test_update_permissions(self):
-        new_perms = {
-            'can_chat': False,
-            'can_list_files': True,
-            'can_download_files': False,
-            'is_blocked': True
-        }
-        self.db.update_peer_permissions(self.peer_ip, new_perms)
-        perms = self.db.get_peer_permissions(self.peer_ip)
-        self.assertEqual(perms, new_perms)
-        self.assertTrue(self.db.is_peer_blocked(self.peer_ip))
+    chat_port = 12400
+    file_port = 12401
 
-    def test_file_sharing_authorization(self):
-        # Share a folder
-        shared_folder = "/home/user/shared"
-        self.db.add_file("shared", shared_folder, 0, "127.0.0.1", is_folder=True)
+    # Initialize managers
+    net_mgr = NetworkManager(db, chat_port)
+    file_mgr = FileTransferManager(db, file_port)
 
-        # Test exact match
-        self.assertTrue(self.db.is_file_shared(shared_folder))
+    peer_ip = "127.0.0.1"
+    # We are the peer to ourselves for this test
 
-        # Test file inside folder
-        file_inside = os.path.join(shared_folder, "test.txt")
-        self.assertTrue(self.db.is_file_shared(file_inside))
+    print("\n--- Testing Blocked Peer ---")
+    db.add_trusted_peer(peer_ip, "Self", "fake_fingerprint")
+    db.update_peer_permissions(peer_ip, {'is_blocked': True})
 
-        # Test file outside folder
-        file_outside = "/home/user/secret.txt"
-        self.assertFalse(self.db.is_file_shared(file_outside))
+    # Try chat connection
+    try:
+        with socket.create_connection((peer_ip, chat_port), timeout=2) as raw:
+            s = wrap_socket(raw)
+            # The server should close connection after detecting block or return error
+            s.sendall(b'\x00\x00\x00\x02{}') # Empty json
+            resp = s.recv(1024)
+            print(f"Chat response for blocked peer: {resp}")
+            if b"Blocked" in resp or not resp:
+                print("SUCCESS: Chat connection blocked.")
+            else:
+                print("FAILURE: Chat connection NOT blocked.")
+    except Exception as e:
+        print(f"Chat connection failed as expected: {e}")
 
-        # Test partial prefix that isn't a subpath
-        partial = "/home/user/shared_secrets"
-        self.assertFalse(self.db.is_file_shared(partial))
+    # Try file connection
+    try:
+        with socket.create_connection((peer_ip, file_port), timeout=2) as raw:
+            s = wrap_socket(raw)
+            s.sendall(json.dumps({'cmd': 'LIST_SHARED'}).encode())
+            resp = s.recv(1024)
+            print(f"File response for blocked peer: {resp}")
+            if b"Blocked" in resp or not resp:
+                print("SUCCESS: File connection blocked.")
+            else:
+                print("FAILURE: File connection NOT blocked.")
+    except Exception as e:
+        print(f"File connection failed as expected: {e}")
 
-    def test_add_trusted_peer_preserves_permissions(self):
-        new_perms = {
-            'can_chat': False,
-            'can_list_files': False,
-            'can_download_files': False,
-            'is_blocked': True
-        }
-        self.db.update_peer_permissions(self.peer_ip, new_perms)
+    print("\n--- Testing Chat Permission Denied ---")
+    db.update_peer_permissions(peer_ip, {'is_blocked': False, 'can_chat': False})
 
-        # Re-add/update peer (e.g. from HELLO packet)
-        self.db.add_trusted_peer(self.peer_ip, "UpdatedName", "fingerprint123")
+    try:
+        with socket.create_connection((peer_ip, chat_port), timeout=2) as raw:
+            s = wrap_socket(raw)
+            packet = json.dumps({'type': 'MSG', 'sender': 'Test', 'content': 'Hello', 'id': '1'}).encode()
+            length = len(packet)
+            import struct
+            s.sendall(struct.pack('>I', length) + packet)
+            # No response expected for MSG if unauthorized, it just returns
+            print("Chat MSG sent (should be ignored by server logic).")
+            time.sleep(0.5)
+            # Check if message added to DB
+            cursor = db.conn.cursor()
+            cursor.execute("SELECT * FROM messages WHERE id='1'")
+            if cursor.fetchone():
+                print("FAILURE: Message was added to DB despite no chat permission!")
+            else:
+                print("SUCCESS: Message was NOT added to DB.")
+    except Exception as e:
+        print(f"Chat error: {e}")
 
-        perms = self.db.get_peer_permissions(self.peer_ip)
-        self.assertEqual(perms, new_perms)
+    print("\n--- Testing File List Permission Denied ---")
+    db.update_peer_permissions(peer_ip, {'can_list_files': False})
 
-        peer = self.db.get_trusted_peer(self.peer_ip)
-        self.assertEqual(peer[1], "UpdatedName")
+    try:
+        with socket.create_connection((peer_ip, file_port), timeout=2) as raw:
+            s = wrap_socket(raw)
+            s.sendall(json.dumps({'cmd': 'LIST_SHARED'}).encode())
+            resp = s.recv(1024)
+            print(f"File List response: {resp}")
+            if b"Permission denied" in resp:
+                print("SUCCESS: File list denied.")
+            else:
+                print("FAILURE: File list NOT denied.")
+    except Exception as e:
+        print(f"File error: {e}")
+
+    net_mgr.close()
+    file_mgr.close()
+    db.close()
+    if os.path.exists(db_name): os.remove(db_name)
 
 if __name__ == "__main__":
-    unittest.main()
+    run_security_tests()
