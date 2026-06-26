@@ -135,6 +135,8 @@ class LANMessengerApp(ctk.CTk):
         self.after(2000, self.refresh_peers)
         self.load_chat_history()
         self.after(100, lambda: self.msg_entry.focus_set())
+        self.bind("<Control-f>", self.focus_search)
+        self.bind("<Control-F>", self.focus_search)
 
         # Start Message Reaper
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
@@ -571,6 +573,7 @@ class LANMessengerApp(ctk.CTk):
         dialog.bind("<Escape>", lambda e: dialog.destroy())
         connect_btn = ctk.CTkButton(dialog, text="Connect", command=connect)
         connect_btn.pack(pady=20)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         self.after(200, lambda: entry.focus_set() if entry.winfo_exists() else None)
 
     def try_manual_connect(self, ip, dialog, btn):
@@ -1098,6 +1101,7 @@ class LANMessengerApp(ctk.CTk):
         dialog.bind("<Escape>", lambda e: dialog.destroy())
         save_btn = ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green")
         save_btn.pack(pady=20)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         self.after(200, lambda: entry_chat.focus_set())
 
     def on_closing(self):
