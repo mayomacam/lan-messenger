@@ -222,7 +222,7 @@ class LANMessengerApp(ctk.CTk):
         """Background thread for periodic database maintenance (runs every 15s)."""
         while True:
             try:
-                # Reap messages
+                # Reap messages and files in background
                 msg_count = self.db.reap_expired_messages()
                 if msg_count > 0:
                     self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
