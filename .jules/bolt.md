@@ -34,6 +34,6 @@
 **Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
 **Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
 
-## 2025-05-24 - [Strategic Indexing for Logs and Files]
-**Learning:** Queries involving `ORDER BY` on non-indexed columns (like audit logs by timestamp) or range filtering (like file expiration) trigger full table scans and expensive temporary B-Tree sorts. Adding targeted indexes converts these into efficient index scans, reducing retrieval time by ~4.7x even for relatively small datasets (10k rows).
-**Action:** Use `EXPLAIN QUERY PLAN` to identify 'SCAN' or 'USE TEMP B-TREE' operations and replace them with indexed 'SEARCH' or 'SCAN' operations on columns used in `WHERE` or `ORDER BY` clauses.
+## 2025-05-24 - [UI Refresh Cycles with Debouncing and Lazy Loading]
+**Learning:** Polling loops and unconditioned UI updates (e.g., refreshing all chat tabs when only one is visible) are major performance sinks in GUI apps. Implementing visibility checks (lazy loading) and debouncing (throttling) ensures that CPU-intensive rendering and database queries only occur when necessary.
+**Action:** Always check widget visibility or tab state before performing heavy UI updates. Use a standard debounce pattern (e.g., 100ms) for high-frequency events to prevent UI lag.
