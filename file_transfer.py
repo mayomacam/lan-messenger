@@ -140,9 +140,10 @@ class FileTransferManager:
             if not isinstance(cmd, str): return
 
             if cmd == 'PUSH_FILE':
-                if not perms.get('can_download_files'): # In this context, PUSH means they are sending to us
-                     # We might want a separate permission for this, but let's reuse
-                     pass
+                if not perms.get('can_download_files'):
+                    if logger: logger.log("SECURITY_ALERT", f"Peer {addr[0]} denied PUSH_FILE: permission missing.")
+                    client.sendall(json.dumps({'status': 'ERR', 'msg': 'Upload permission denied'}).encode())
+                    return
 
                 filename = req.get('filename')
                 size = req.get('size')
