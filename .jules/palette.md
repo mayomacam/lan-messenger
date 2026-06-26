@@ -30,6 +30,6 @@
 **Learning:** Adding the `Esc` key shortcut for clearing search bars is a standard UX pattern that improves keyboard accessibility and efficiency for power users, complementing visual clear buttons.
 **Action:** Always ensure interactive filtering or search components have consistent keyboard-driven reset mechanisms (like the Escape key).
 
-## 2026-06-20 - Widget-specific API nuances in CustomTkinter
-**Learning:** While `CTkTextbox` mimics standard Tkinter Text behavior, advanced configuration like `tag_config` must be applied to the internal `._textbox` attribute. Failing to do so results in runtime crashes that aren't always obvious during static analysis.
-**Action:** Always verify if a library wrapper exposes all necessary methods of its underlying components, and target the internal widget for low-level configuration when necessary.
+## 2026-06-19 - Visual confirmation for background actions
+**Learning:** For actions that happen "behind the scenes" (like sharing a file or refreshing a log), users often feel uncertain if the action was actually registered. Replacing a static button label with temporary success feedback (e.g., "Shared!" or "Refreshed") provides immediate, non-disruptive confirmation.
+**Action:** Use temporary button label and color transitions (e.g., green '#2ecc71') to confirm successful asynchronous or background operations.
