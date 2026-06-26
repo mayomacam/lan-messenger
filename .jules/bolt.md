@@ -34,6 +34,6 @@
 **Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
 **Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
 
-## 2025-05-24 - [Checksum Caching and Thread-Safe UI Maintenance]
-**Learning:** Redundant cryptographic operations (like SHA-256 for directory listings) and overlapping main-thread polling loops (e.g., redundant cleanup tasks) introduce significant latency and CPU overhead. Consolidating background maintenance into a single daemon thread and using metadata-based LRU caching for checksums ensures UI responsiveness and minimizes unnecessary disk I/O.
-**Action:** Implement metadata-based caching (path, mtime, size) for expensive file operations. Replace multiple UI-thread polling loops with a single thread-safe background maintenance loop that only triggers UI refreshes when relevant state changes and the UI is active.
+## 2025-05-24 - [UI Refresh Cycles with Debouncing and Lazy Loading]
+**Learning:** Polling loops and unconditioned UI updates (e.g., refreshing all chat tabs when only one is visible) are major performance sinks in GUI apps. Implementing visibility checks (lazy loading) and debouncing (throttling) ensures that CPU-intensive rendering and database queries only occur when necessary.
+**Action:** Always check widget visibility or tab state before performing heavy UI updates. Use a standard debounce pattern (e.g., 100ms) for high-frequency events to prevent UI lag.
