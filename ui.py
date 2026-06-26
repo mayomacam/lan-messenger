@@ -483,7 +483,7 @@ class LANMessengerApp(ctk.CTk):
                 self.current_private_peer = peer_ip
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
-                self.load_private_chat(peer_ip)
+                self.load_private_chat(peer_ip, debounce=False)
 
     def on_search_key(self, event):
         # Throttle live search
