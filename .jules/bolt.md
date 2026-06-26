@@ -34,6 +34,6 @@
 **Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
 **Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
 
-## 2025-05-24 - [Lazy UI Loading and Visibility Checks]
-**Learning:** Performing database queries and UI updates for invisible tabs is a massive waste of resources. By implementing visibility checks in data-loading methods and triggering them on tab change, main-thread responsiveness can be dramatically improved without losing data consistency.
-**Action:** Always check `self.tabview.get()` before performing expensive UI updates. Use `self.after(0, ...)` from background threads to schedule maintenance, and only refresh the UI if the relevant tab is currently visible.
+## 2025-05-24 - [UI Refresh Cycles with Debouncing and Lazy Loading]
+**Learning:** Polling loops and unconditioned UI updates (e.g., refreshing all chat tabs when only one is visible) are major performance sinks in GUI apps. Implementing visibility checks (lazy loading) and debouncing (throttling) ensures that CPU-intensive rendering and database queries only occur when necessary.
+**Action:** Always check widget visibility or tab state before performing heavy UI updates. Use a standard debounce pattern (e.g., 100ms) for high-frequency events to prevent UI lag.
