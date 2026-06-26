@@ -1064,9 +1064,7 @@ class LANMessengerApp(ctk.CTk):
             self.file_manager.download_file(ip, path)
 
     def open_peer_security(self, ip, name):
-        dialog = PeerSecurityDialog(self, self.db, ip, name, self.logger)
-        # We don't need to do anything after it closes, but we could refresh
-        self.after(500, self.refresh_peers)
+        PeerSecurityDialog(self, self.db, ip, name, self.logger)
 
     def open_settings(self):
         dialog = ctk.CTkToplevel(self)
