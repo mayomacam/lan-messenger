@@ -325,6 +325,18 @@ class NetworkManager:
             if not isinstance(msg_type, str):
                 return
 
+            # Granular permission check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                return # Already handled at accept but defense in depth
+
+            if msg_type in ('MSG', 'MSG_PRIV', 'MSG_EDIT', 'MSG_DEL'):
+                if not perms.get('can_chat'):
+                    msg = f"Unauthorized chat request from {addr[0]} (can_chat=0)"
+                    print(f"[DEBUG] {msg}")
+                    if logger: logger.log("SECURITY_ALERT", msg)
+                    return
+
             if msg_type == 'HELLO':
                 sender_username = data.get('username')
                 if not isinstance(sender_username, str): return

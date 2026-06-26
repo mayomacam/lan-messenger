@@ -56,6 +56,14 @@ class FileTransferManager:
         while self.running:
             try:
                 client, addr = self.server_socket.accept()
+
+                # Pre-TLS check: Drop connection immediately if peer is blocked
+                perms = self.db.get_peer_permissions(addr[0])
+                if perms.get('is_blocked'):
+                    print(f"[DEBUG] Blocking file connection from {addr[0]} (is_blocked=1)")
+                    client.close()
+                    continue
+
                 # Wrap the raw socket with TLS before handing to handler
                 client = wrap_socket(client, server_side=True)
 
@@ -137,6 +145,11 @@ class FileTransferManager:
                 # token matches – continue processing
             cmd = req.get('cmd')
             if not isinstance(cmd, str): return
+
+            # Granular permission check
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                return
 
             if cmd == 'PUSH_FILE':
                 # Enforce can_download_files (peer pushing to us is like we downloading from them,
