@@ -164,8 +164,6 @@ class Database:
             # Index to speed up ORDER BY timestamp DESC queries
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)")
 
-            # Index to speed up expires_at filtering for shared files
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_expires_at ON files(expires_at)")
 
             self.conn.commit()
 
