@@ -284,19 +284,33 @@ class Database:
                 cursor = self.conn.execute("DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?", (now,))
                 return cursor.rowcount
 
-    def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = 'untrusted'):
+    def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = None):
         now = time.time()
         with self.lock:
             with self.conn:
-                self.conn.execute("""
-                    INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(ip) DO UPDATE SET
-                        username=excluded.username,
-                        fingerprint=excluded.fingerprint,
-                        trust_level=excluded.trust_level,
-                        last_seen=excluded.last_seen
-                """, (ip, username, fingerprint, trust_level, now))
+                # Check if peer exists to preserve permissions and trust level
+                cursor = self.conn.execute("SELECT trust_level, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+                row = cursor.fetchone()
+
+                if row:
+                    # Use existing trust level if none provided
+                    final_trust = trust_level if trust_level is not None else row[0]
+                    # Update while preserving permissions
+                    self.conn.execute("""
+                        UPDATE trusted_peers SET
+                            username = ?,
+                            fingerprint = ?,
+                            trust_level = ?,
+                            last_seen = ?
+                        WHERE ip = ?
+                    """, (username, fingerprint, final_trust, now, ip))
+                else:
+                    # Insert new with defaults
+                    final_trust = trust_level if trust_level is not None else 'untrusted'
+                    self.conn.execute("""
+                        INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked)
+                        VALUES (?, ?, ?, ?, ?, 1, 1, 1, 0)
+                    """, (ip, username, fingerprint, final_trust, now))
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:

@@ -263,6 +263,16 @@ class NetworkManager:
         logger = audit.get_logger()
         try:
             client.settimeout(10)
+
+            # Security check: granular permissions (is_blocked)
+            perms = self.db.get_peer_permissions(addr[0])
+            if perms.get('is_blocked'):
+                msg = f"Connection from {addr[0]} rejected: Peer is blocked."
+                print(f"[DEBUG] {msg}")
+                if logger: logger.log("SECURITY_ALERT", msg)
+                self._send_json(client, {'status': 'ERR', 'msg': 'Access denied: Blocked'})
+                return
+
             # IP whitelist enforcement
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 msg = f"Connection from {addr[0]} rejected: IP not allowed."

@@ -426,11 +426,17 @@ class LANMessengerApp(ctk.CTk):
             self.peer_trust[ip] = 'trusted'
             self.refresh_peers()
 
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, ip, name, self.db, self.logger, self.refresh_peers)
+
     def refresh_peers(self):
         # Update peer trust levels from DB in batch
         trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
         for ip in self.peers:
             self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
+
+        # Also include blocked status in snapshot for UI refreshes
+        peer_perms = {ip: self.db.get_peer_permissions(ip).get('is_blocked') for ip in self.peers}
 
         # Prevent unnecessary UI rebuilds using snapshot comparison
         # Also include blocked status in snapshot
@@ -450,17 +456,32 @@ class LANMessengerApp(ctk.CTk):
             lbl.pack(pady=20)
 
         for ip, name in self.peers.items():
-            row = ctk.CTkFrame(self.peers_scroll)
+            is_blocked = peer_perms.get(ip, False)
+
+            row = ctk.CTkFrame(self.peers_scroll, fg_color="#333333" if is_blocked else None)
             row.pack(fill="x", pady=2)
-            lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
+
+            label_color = "gray" if is_blocked else None
+            label_text = f"{name}\n{ip}"
+            if is_blocked:
+                label_text += " (BLOCKED)"
+
+            lbl = ctk.CTkLabel(row, text=label_text, font=("Arial", 10), text_color=label_color)
             lbl.pack(side="left", padx=5)
 
+            # Security button
+            btn_sec = ctk.CTkButton(row, text="Sec", width=35, height=20, fg_color="#555555",
+                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+            btn_sec.pack(side="right", padx=2)
+
             btn_browse = ctk.CTkButton(row, text="Browse", width=60, height=20,
-                              command=lambda i=ip, n=name: self.browse_peer_files(i, n))
+                              command=lambda i=ip, n=name: self.browse_peer_files(i, n),
+                              state="disabled" if is_blocked else "normal")
             btn_browse.pack(side="right", padx=5)
 
             btn_chat = ctk.CTkButton(row, text="Chat", width=60, height=20,
-                              command=lambda i=ip, n=name: self.open_private_chat(i, n))
+                              command=lambda i=ip, n=name: self.open_private_chat(i, n),
+                              state="disabled" if is_blocked else "normal")
             btn_chat.pack(side="right", padx=2)
 
             btn_sec = ctk.CTkButton(row, text="Sec", width=40, height=20, fg_color="gray",
