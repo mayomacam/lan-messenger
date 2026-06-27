@@ -342,6 +342,7 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         self.chat_display.tag_config("search_info", foreground="#3B8ED0")
+        self.chat_display._textbox.tag_config("center", justify='center')
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -664,6 +665,12 @@ class LANMessengerApp(ctk.CTk):
     def open_security_dialog(self, ip, name):
         PeerSecurityDialog(self, self.db, ip, name, on_update_cb=self.refresh_peers)
 
+    def focus_search(self, event=None):
+        """Switch to Global Chat and focus search bar."""
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+        return "break"
+
     def on_tab_change(self):
         tab = self.tabview.get()
         if tab == "Global Chat":
@@ -810,6 +817,7 @@ class LANMessengerApp(ctk.CTk):
 
             display = ctk.CTkTextbox(tab_frame, state="disabled")
             display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+            display._textbox.tag_config("center", justify='center')
 
             input_frame = ctk.CTkFrame(tab_frame, height=50)
             input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -882,6 +890,8 @@ class LANMessengerApp(ctk.CTk):
 
         if lines:
             display.insert("end", "\n".join(lines) + "\n")
+        else:
+            display.insert("end", "\n\nNo messages in this private chat.", "center")
 
         display.configure(state="disabled")
         display.see("end")
