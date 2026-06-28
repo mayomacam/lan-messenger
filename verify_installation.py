@@ -10,14 +10,15 @@ def test_db():
     print("Testing Database...")
     try:
         from db import Database
-        db = Database("test.db")
+        db = Database("test_pass", "test_install.db")
         msg_id = db.add_message("test_user", "hello")
         msgs = db.get_messages()
         assert len(msgs) > 0
         assert msgs[0][2] == "hello"
         db.close()
         try:
-            os.remove("test.db")
+            os.remove("test_install.db")
+            os.remove(".master.key")
         except:
              pass
         print("Database OK")
@@ -42,5 +43,6 @@ def test_imports():
             print(f"Import FAILED with unknown error: {e}")
 
 if __name__ == "__main__":
+    if os.path.exists(".master.key"): os.remove(".master.key")
     test_db()
     test_imports()
