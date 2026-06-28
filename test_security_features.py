@@ -17,9 +17,12 @@ class MockLogger:
 
 def run_security_tests():
     db_name = "test_security.db"
+    key_file = ".master.key"
     if os.path.exists(db_name): os.remove(db_name)
+    if os.path.exists(key_file): os.remove(key_file)
 
-    db = Database(db_name)
+    password = "test_password"
+    db = Database(password, db_name=db_name)
     audit.init_logger(db)
 
     chat_port = 12400
@@ -97,7 +100,7 @@ def run_security_tests():
             s.sendall(json.dumps({'cmd': 'LIST_SHARED'}).encode())
             resp = s.recv(1024)
             print(f"File List response: {resp}")
-            if b"Permission denied" in resp:
+            if b"disabled" in resp or b"denied" in resp:
                 print("SUCCESS: File list denied.")
             else:
                 print("FAILURE: File list NOT denied.")
@@ -108,6 +111,7 @@ def run_security_tests():
     file_mgr.close()
     db.close()
     if os.path.exists(db_name): os.remove(db_name)
+    if os.path.exists(key_file): os.remove(key_file)
 
 if __name__ == "__main__":
     run_security_tests()
