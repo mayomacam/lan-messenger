@@ -5,7 +5,7 @@ import threading
 import os
 import base64
 import functools
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 class EncryptionManager:
@@ -346,6 +346,15 @@ class Database:
                         VALUES (?, ?, ?, ?, ?, 1, 1, 1, 0)
                     """, (ip, username, fingerprint, final_trust, now))
 
+    def get_trusted_peer(self, ip: str) -> Tuple:
+        with self.lock:
+            # Explicitly select columns to handle schema variations gracefully
+            cursor = self.conn.execute("""
+                SELECT ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen
+                FROM trusted_peers WHERE ip = ?
+            """, (ip,))
+            return cursor.fetchone()
+
     def get_peer_permissions(self, ip: str) -> dict:
         """Returns a dictionary of peer permissions."""
         with self.lock:
@@ -377,48 +386,22 @@ class Database:
                     ip
                 ))
 
-    def get_trusted_peer(self, ip: str) -> Tuple:
+    def get_peers_permissions(self, ips: List[str]) -> Dict[str, dict]:
+        """Batch fetch permissions for multiple IPs to reduce DB roundtrips."""
+        if not ips:
+            return {}
+        placeholders = ",".join(["?"] * len(ips))
         with self.lock:
-            # Explicitly select columns to handle schema variations gracefully
-            cursor = self.conn.execute("""
-                SELECT ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen
-                FROM trusted_peers WHERE ip = ?
-            """, (ip,))
-            return cursor.fetchone()
-
-    def get_peer_permissions(self, ip: str) -> dict:
-        """Returns a dictionary of permissions for the given peer IP."""
-        peer = self.get_trusted_peer(ip)
-        if not peer:
-            # Default permissions for new/unknown peers
-            return {
-                'is_blocked': 0,
-                'can_chat': 1,
-                'can_list_files': 1,
-                'can_download_files': 1
-            }
-        return {
-            'is_blocked': peer[4],
-            'can_chat': peer[5],
-            'can_list_files': peer[6],
-            'can_download_files': peer[7]
-        }
-
-    def update_peer_permissions(self, ip: str, permissions: dict):
-        """Updates granular permissions for a peer."""
-        with self.lock:
-            with self.conn:
-                self.conn.execute("""
-                    UPDATE trusted_peers
-                    SET is_blocked = ?, can_chat = ?, can_list_files = ?, can_download_files = ?
-                    WHERE ip = ?
-                """, (
-                    permissions.get('is_blocked', 0),
-                    permissions.get('can_chat', 1),
-                    permissions.get('can_list_files', 1),
-                    permissions.get('can_download_files', 1),
-                    ip
-                ))
+            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips)
+            results = {}
+            for row in cursor.fetchall():
+                results[row[0]] = {
+                    'can_chat': bool(row[1]),
+                    'can_list_files': bool(row[2]),
+                    'can_download_files': bool(row[3]),
+                    'is_blocked': bool(row[4])
+                }
+            return results
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         """Batch fetch trust levels for multiple IPs to reduce DB roundtrips."""
@@ -434,31 +417,6 @@ class Database:
         with self.lock:
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
-
-    def get_peer_permissions(self, ip: str) -> dict:
-        with self.lock:
-            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
-            row = cursor.fetchone()
-            if row:
-                return {
-                    'can_chat': bool(row[0]),
-                    'can_list_files': bool(row[1]),
-                    'can_download_files': bool(row[2]),
-                    'is_blocked': bool(row[3])
-                }
-            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
-
-    def update_peer_permissions(self, ip: str, perms: dict):
-        with self.lock:
-            with self.conn:
-                self.conn.execute("""
-                    UPDATE trusted_peers SET
-                        can_chat = ?, can_list_files = ?, can_download_files = ?, is_blocked = ?
-                    WHERE ip = ?
-                """, (int(perms.get('can_chat', True)),
-                      int(perms.get('can_list_files', True)),
-                      int(perms.get('can_download_files', True)),
-                      int(perms.get('is_blocked', False)), ip))
 
     def is_peer_blocked(self, ip: str) -> bool:
         with self.lock:
