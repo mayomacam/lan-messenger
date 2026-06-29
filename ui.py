@@ -533,16 +533,15 @@ class LANMessengerApp(ctk.CTk):
 
     def refresh_peers(self):
         # Update peer trust levels from DB in batch
-        trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
+        peer_ips = list(self.peers.keys())
+        trust_levels = self.db.get_peer_trust_levels(peer_ips)
         for ip in self.peers:
             self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
 
-        # Also include blocked status in snapshot for UI refreshes
-        peer_perms = {ip: self.db.get_peer_permissions(ip).get('is_blocked') for ip in self.peers}
+        # Batch fetch all permissions to avoid O(N) database lookups
+        all_perms = self.db.get_peers_permissions(peer_ips)
 
         # Prevent unnecessary UI rebuilds using snapshot comparison
-        # Also include blocked status in snapshot
-        all_perms = self.db.get_peers_permissions(list(self.peers.keys()))
         current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust, "perms": all_perms}, sort_keys=True)
         if current_snapshot == self._last_peers_snapshot:
             self.after(2000, self.refresh_peers)
@@ -558,12 +557,14 @@ class LANMessengerApp(ctk.CTk):
             lbl.pack(pady=20)
 
         for ip, name in self.peers.items():
-            is_blocked = peer_perms.get(ip, False)
+            # Use permissions from the batch fetch
+            perms = all_perms.get(ip, {})
+            is_blocked = perms.get('is_blocked', False)
 
             row = ctk.CTkFrame(self.peers_scroll, fg_color="#333333" if is_blocked else None)
             row.pack(fill="x", pady=2)
 
-            label_color = "gray" if is_blocked else None
+            label_color = "red" if is_blocked else None
             label_text = f"{name}\n{ip}"
             if is_blocked:
                 label_text += " (BLOCKED)"
@@ -571,8 +572,8 @@ class LANMessengerApp(ctk.CTk):
             lbl = ctk.CTkLabel(row, text=label_text, font=("Arial", 10), text_color=label_color)
             lbl.pack(side="left", padx=5)
 
-            # Security button
-            btn_sec = ctk.CTkButton(row, text="Sec", width=35, height=20, fg_color="#555555",
+            # Security button (One unified instance)
+            btn_sec = ctk.CTkButton(row, text="Sec", width=40, height=20, fg_color="#555555",
                               command=lambda i=ip, n=name: self.open_peer_security(i, n))
             btn_sec.pack(side="right", padx=2)
 
@@ -585,15 +586,6 @@ class LANMessengerApp(ctk.CTk):
                               command=lambda i=ip, n=name: self.open_private_chat(i, n),
                               state="disabled" if is_blocked else "normal")
             btn_chat.pack(side="right", padx=2)
-
-            btn_sec = ctk.CTkButton(row, text="Sec", width=40, height=20, fg_color="gray",
-                              command=lambda i=ip, n=name: PeerSecurityDialog(self, self.db, i, n))
-            btn_sec.pack(side="right", padx=2)
-
-            # Blocked indicator
-            is_blocked = all_perms.get(ip, {}).get('is_blocked')
-            if is_blocked:
-                lbl.configure(text_color="red")
 
             # Trust indicator
             trust = self.peer_trust.get(ip, 'untrusted')
