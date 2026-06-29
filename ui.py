@@ -612,6 +612,7 @@ class LANMessengerApp(ctk.CTk):
         dialog.title("Connect to IP")
         dialog.geometry("300x280")
         dialog.transient(self)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
 
         ip_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         ip_frame.pack(pady=10)
