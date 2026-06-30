@@ -347,7 +347,7 @@ class LANMessengerApp(ctk.CTk):
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         self.input_frame.grid_columnconfigure(0, weight=1)
 
-        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message...")
+        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message... (Enter to send)")
         self.msg_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.msg_entry.bind("<Return>", self.send_message)
 
@@ -365,7 +365,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
         self.search_frame.grid_columnconfigure(0, weight=1)
 
-        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
+        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages... (Ctrl+F)")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
         self.search_entry.bind("<KeyRelease>", self.on_search_key)
@@ -374,7 +374,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
 
-        self.clear_search_btn = ctk.CTkButton(self.search_frame, text="X", width=30, fg_color="gray", command=self.clear_search)
+        self.clear_search_btn = ctk.CTkButton(self.search_frame, text="Clear", width=60, fg_color="gray", command=self.clear_search)
         self.clear_search_btn.grid(row=0, column=2, padx=5, pady=5)
 
         # Context Menu for Message Actions
@@ -477,20 +477,18 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
-        if not logs:
-            self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
-        else:
-            for log in logs:
-                # log: (id, event_type, details, timestamp)
-                event_type = log[1]
-                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-                line = f"[{ts}] {event_type}: {log[2]}\n"
+        lines = []
+        for log in logs:
+            # log: (id, event_type, details, timestamp)
+            event_type = log[1]
+            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+            lines.append(f"[{ts}] {event_type}: {log[2]}")
 
         if lines:
             self.audit_display.insert("end", "\n".join(lines) + "\n")
         else:
             self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
-            self.audit_display.tag_config("center", justify='center')
+            self.audit_display._textbox.tag_config("center", justify='center')
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("1.0")
@@ -664,6 +662,10 @@ class LANMessengerApp(ctk.CTk):
 
     def open_security_dialog(self, ip, name):
         PeerSecurityDialog(self, self.db, ip, name, on_update_cb=self.refresh_peers)
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
 
     def on_tab_change(self):
         tab = self.tabview.get()
