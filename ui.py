@@ -205,12 +205,12 @@ class LANMessengerApp(ctk.CTk):
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
         self.reaper_thread.start()
 
-    def _refresh_after_reap(self, msg_count):
+    def _refresh_after_reap(self, msg_count, file_count):
         """Thread-safe UI refresh after background reaping."""
         if not self.winfo_exists():
             return
+
         if msg_count > 0:
-            self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
             # Only refresh visible chat tabs to save resources
             current_tab = self.tabview.get()
             if current_tab == "Global Chat":
@@ -218,21 +218,18 @@ class LANMessengerApp(ctk.CTk):
             elif current_tab.startswith("Chat: "):
                 if self.current_private_peer:
                     self.load_private_chat(self.current_private_peer)
+
+        if file_count > 0:
+            # Refresh file view if current source is local
+            if self.current_file_view_source == "Local":
+                self.refresh_files_view()
+
     def message_reaper_loop(self):
         """Background thread for periodic database maintenance (runs every 15s)."""
         while True:
             try:
                 # Reap messages and files in background
                 msg_count = self.db.reap_expired_messages()
-                if msg_count > 0:
-                    self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
-                    # Background loop triggers UI updates via thread-safe after(0, ...)
-                    self.after(0, self.load_chat_history)
-                    # Also reload private chat if open
-                    if self.current_private_peer:
-                        self.after(0, lambda p=self.current_private_peer: self.load_private_chat(p))
-
-                # Reap files
                 file_count = self.db.delete_expired_files()
 
                 if msg_count > 0 or file_count > 0:
@@ -242,7 +239,7 @@ class LANMessengerApp(ctk.CTk):
                         self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
 
                     # Schedule UI refresh on main thread
-                    self.after(0, self._refresh_after_reap)
+                    self.after(0, self._refresh_after_reap, msg_count, file_count)
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
             time.sleep(15)
@@ -477,20 +474,20 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
 
-        if not logs:
-            self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
-        else:
+        lines = []
+        if logs:
             for log in logs:
                 # log: (id, event_type, details, timestamp)
                 event_type = log[1]
                 ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-                line = f"[{ts}] {event_type}: {log[2]}\n"
+                lines.append(f"[{ts}] {event_type}: {log[2]}")
 
         if lines:
             self.audit_display.insert("end", "\n".join(lines) + "\n")
         else:
             self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
-            self.audit_display.tag_config("center", justify='center')
+
+        self.audit_display._textbox.tag_config("center", justify='center')
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("1.0")
@@ -532,17 +529,17 @@ class LANMessengerApp(ctk.CTk):
         PeerSecurityDialog(self, ip, name, self.db, self.logger, self.refresh_peers)
 
     def refresh_peers(self):
+        peer_ips = list(self.peers.keys())
         # Update peer trust levels from DB in batch
-        trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
+        trust_levels = self.db.get_peer_trust_levels(peer_ips)
         for ip in self.peers:
             self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
 
-        # Also include blocked status in snapshot for UI refreshes
-        peer_perms = {ip: self.db.get_peer_permissions(ip).get('is_blocked') for ip in self.peers}
+        # Batch fetch all permissions to avoid N+1 query bottleneck
+        all_perms = self.db.get_peers_permissions(peer_ips)
 
         # Prevent unnecessary UI rebuilds using snapshot comparison
         # Also include blocked status in snapshot
-        all_perms = self.db.get_peers_permissions(list(self.peers.keys()))
         current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust, "perms": all_perms}, sort_keys=True)
         if current_snapshot == self._last_peers_snapshot:
             self.after(2000, self.refresh_peers)
@@ -558,7 +555,8 @@ class LANMessengerApp(ctk.CTk):
             lbl.pack(pady=20)
 
         for ip, name in self.peers.items():
-            is_blocked = peer_perms.get(ip, False)
+            perms = all_perms.get(ip, {})
+            is_blocked = perms.get('is_blocked', False)
 
             row = ctk.CTkFrame(self.peers_scroll, fg_color="#333333" if is_blocked else None)
             row.pack(fill="x", pady=2)
