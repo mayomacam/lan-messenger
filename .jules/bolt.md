@@ -37,3 +37,7 @@
 ## 2025-05-24 - [UI Refresh Cycles with Debouncing and Lazy Loading]
 **Learning:** Polling loops and unconditioned UI updates (e.g., refreshing all chat tabs when only one is visible) are major performance sinks in GUI apps. Implementing visibility checks (lazy loading) and debouncing (throttling) ensures that CPU-intensive rendering and database queries only occur when necessary.
 **Action:** Always check widget visibility or tab state before performing heavy UI updates. Use a standard debounce pattern (e.g., 100ms) for high-frequency events to prevent UI lag.
+
+## 2026-07-01 - [Thread-Safe DB Caching & Batching]
+**Learning:** Using `lru_cache` on methods returning mutable objects (like dicts) can lead to accidental cache pollution if callers modify the results. Additionally, clearing the cache outside of a mutex can cause race conditions where a reader caches stale data from the DB before the writer completes.
+**Action:** Always cache immutable types (tuples) in internal helpers and convert to mutable types (dicts) in public wrappers. Ensure `cache_clear()` is called *inside* the same lock used for database writes to maintain strict consistency. Use SQL 'IN' clauses for batch permission fetching to eliminate O(N) query patterns in UI loops.
