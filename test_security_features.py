@@ -97,7 +97,7 @@ def run_security_tests():
             s.sendall(json.dumps({'cmd': 'LIST_SHARED'}).encode())
             resp = s.recv(1024)
             print(f"File List response: {resp}")
-            if b"Permission denied" in resp:
+            if b"Listing disabled" in resp:
                 print("SUCCESS: File list denied.")
             else:
                 print("FAILURE: File list NOT denied.")
