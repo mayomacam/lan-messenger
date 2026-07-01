@@ -60,6 +60,7 @@ class PeerSecurityDialog(ctk.CTkToplevel):
         ctk.CTkButton(btn_frame, text="Save", width=100, command=self.save).pack(side="left", padx=10)
 
         self.grab_set()
+        self.bind("<Escape>", lambda e: self.destroy())
 
     def save(self):
         new_perms = {
@@ -91,6 +92,7 @@ class PeerSecurityDialog(ctk.CTkToplevel):
 
         self.transient(parent)
         self.grab_set() # Modal
+        self.bind("<Escape>", lambda e: self.destroy())
 
         perms = self.db.get_peer_permissions(peer_ip)
 
@@ -198,8 +200,8 @@ class LANMessengerApp(ctk.CTk):
         self.after(2000, self.refresh_peers)
         self.load_chat_history()
         self.after(100, lambda: self.msg_entry.focus_set())
-        self.bind("<Control-f>", self.focus_search)
-        self.bind("<Control-F>", self.focus_search)
+        self.bind_all("<Control-f>", self.focus_search)
+        self.bind_all("<Control-F>", self.focus_search)
 
         # Start Message Reaper
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
@@ -242,7 +244,7 @@ class LANMessengerApp(ctk.CTk):
                         self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
 
                     # Schedule UI refresh on main thread
-                    self.after(0, self._refresh_after_reap)
+                    self.after(0, lambda: self._refresh_after_reap(msg_count))
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
             time.sleep(15)
@@ -347,7 +349,7 @@ class LANMessengerApp(ctk.CTk):
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         self.input_frame.grid_columnconfigure(0, weight=1)
 
-        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message...")
+        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message... (Enter to send)")
         self.msg_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.msg_entry.bind("<Return>", self.send_message)
 
@@ -365,7 +367,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
         self.search_frame.grid_columnconfigure(0, weight=1)
 
-        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
+        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages... (Ctrl+F)")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
         self.search_entry.bind("<KeyRelease>", self.on_search_key)
@@ -480,11 +482,12 @@ class LANMessengerApp(ctk.CTk):
         if not logs:
             self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
         else:
+            lines = []
             for log in logs:
                 # log: (id, event_type, details, timestamp)
                 event_type = log[1]
                 ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-                line = f"[{ts}] {event_type}: {log[2]}\n"
+                lines.append(f"[{ts}] {event_type}: {log[2]}")
 
         if lines:
             self.audit_display.insert("end", "\n".join(lines) + "\n")
@@ -679,6 +682,11 @@ class LANMessengerApp(ctk.CTk):
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
                 self.load_private_chat(peer_ip, debounce=False)
+
+    def focus_search(self, event=None):
+        """Switches to Global Chat and focuses the search entry (Ctrl+F)."""
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
 
     def on_search_key(self, event):
         # Throttle live search
@@ -1229,6 +1237,7 @@ class PeerSecurityDialog(ctk.CTkToplevel):
 
         self.transient(parent)
         self.grab_set()
+        self.bind("<Escape>", lambda e: self.destroy())
 
     def save(self):
         new_perms = {
