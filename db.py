@@ -84,6 +84,7 @@ class EncryptionManager:
             master_key = AESGCM(kek).decrypt(nonce, wrapped_key, None)
             self.key = master_key
             self.aesgcm = AESGCM(self.key)
+            self.decrypt.cache_clear()
             return True
         except Exception:
             return False
