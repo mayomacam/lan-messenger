@@ -35,25 +35,42 @@ class TestSecurityFeatures(unittest.TestCase):
         if os.path.exists(cls.db_name):
             os.remove(cls.db_name)
 
-    def _send_raw_json(self, port, data):
+    def _send_raw_json(self, port, data, use_tls=True):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(2)
             s.connect(("127.0.0.1", port))
-            import ssl
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with ctx.wrap_socket(s) as ssl_sock:
-                serialized = json.dumps(data).encode()
-                ssl_sock.sendall(struct.pack('>I', len(serialized)) + serialized)
+            if use_tls:
+                import ssl
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
                 try:
-                    return ssl_sock.recv(4096)
+                    with ctx.wrap_socket(s) as ssl_sock:
+                        serialized = json.dumps(data).encode()
+                        ssl_sock.sendall(struct.pack('>I', len(serialized)) + serialized)
+                        try:
+                            return ssl_sock.recv(4096)
+                        except:
+                            return None
+                except ssl.SSLEOFError:
+                    # Expected if server closes connection pre-TLS
+                    return None
+            else:
+                serialized = json.dumps(data).encode()
+                # If it's chat port, it expects length prefix
+                if port == self.chat_port:
+                    s.sendall(struct.pack('>I', len(serialized)) + serialized)
+                else:
+                    s.sendall(serialized)
+                try:
+                    return s.recv(4096)
                 except:
                     return None
 
     def test_blocked_peer_chat(self):
         self.db.update_peer_permissions(self.peer_ip, {'is_blocked': 1})
         packet = {'type': 'MSG', 'sender': 'MaliciousPeer', 'content': 'Hello', 'id': '123'}
+        # Should be rejected pre-TLS, so we don't care if TLS fails
         self._send_raw_json(self.chat_port, packet)
         msgs = self.db.get_messages()
         self.assertFalse(any(m[2] == 'Hello' for m in msgs))
