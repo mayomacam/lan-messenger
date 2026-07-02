@@ -314,7 +314,9 @@ class LANMessengerApp(ctk.CTk):
         LockScreen(self, self.manual_unlock)
 
     def manual_unlock(self, password):
-        if password == self.master_password:
+        import hashlib
+        input_hash = hashlib.sha256((password + self.password_salt).encode()).hexdigest()
+        if input_hash == self.password_hash:
             self.locked = False
             self.reset_inactivity()
             if self.logger:
