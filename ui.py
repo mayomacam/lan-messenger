@@ -267,8 +267,8 @@ class LANMessengerApp(ctk.CTk):
         self.bind("<Control-F>", self.focus_search)
 
         # Activity Tracking
-        self.bind_all("<Any-KeyPress>", self._update_activity)
-        self.bind_all("<Any-Button>", self._update_activity)
+        self.bind_all("<KeyPress>", self._update_activity)
+        self.bind_all("<Button>", self._update_activity)
 
         # Start Message Reaper
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
