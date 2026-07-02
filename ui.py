@@ -197,18 +197,18 @@ class LANMessengerApp(ctk.CTk):
         self._locked = False
 
         # Prompt for password
-        password = self._prompt_password()
-        if not password:
-            self.destroy()
-            return
+        while True:
+            password = self._prompt_password()
+            if not password:
+                self.destroy()
+                return
 
-        try:
-            self.db = Database(password)
-            self._master_password = password
-        except ValueError as e:
-            messagebox.showerror("Error", str(e))
-            self.destroy()
-            return
+            try:
+                self.db = Database(password)
+                self._master_password = password
+                break
+            except ValueError as e:
+                messagebox.showerror("Error", f"Authentication failed: {e}")
 
         self.deiconify() # Show app
         self._chat_history_after_id = None
