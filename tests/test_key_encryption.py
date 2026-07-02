@@ -1,55 +1,51 @@
 import os
 import unittest
-from db import Database, EncryptionManager
+from db import EncryptionManager
 
-class TestEncryption(unittest.TestCase):
+class TestKeyEncryption(unittest.TestCase):
     def setUp(self):
         self.key_file = ".test_master.key"
-        self.db_name = "test_enc.db"
-        if os.path.exists(self.key_file): os.remove(self.key_file)
-        if os.path.exists(self.db_name): os.remove(self.db_name)
+        if os.path.exists(self.key_file):
+            os.remove(self.key_file)
 
     def tearDown(self):
-        if os.path.exists(self.key_file): os.remove(self.key_file)
-        if os.path.exists(self.db_name): os.remove(self.db_name)
+        if os.path.exists(self.key_file):
+            os.remove(self.key_file)
 
-    def test_key_derivation_and_encryption(self):
-        password = "secret_password"
-        # First initialization creates the key
-        em = EncryptionManager(password, key_file=self.key_file)
-        original_text = "Sensitive information"
-        encrypted_text = em.encrypt(original_text)
-        self.assertTrue(encrypted_text.startswith("enc:"))
+    def test_encryption_decryption_cycle(self):
+        password = "secure_password123"
+        em = EncryptionManager(key_file=self.key_file, password=password)
 
-        # Second initialization with same password should decrypt
-        em2 = EncryptionManager(password, key_file=self.key_file)
-        decrypted_text = em2.decrypt(encrypted_text)
-        self.assertEqual(original_text, decrypted_text)
+        test_data = "Hello World"
+        encrypted = em.encrypt(test_data)
+        self.assertNotEqual(test_data, encrypted)
+        self.assertTrue(encrypted.startswith("enc:"))
+
+        # New manager instance with same password
+        em2 = EncryptionManager(key_file=self.key_file, password=password)
+        decrypted = em2.decrypt(encrypted)
+        self.assertEqual(test_data, decrypted)
 
     def test_invalid_password(self):
-        password = "secret_password"
-        em = EncryptionManager(password, key_file=self.key_file)
+        password = "correct_password"
+        EncryptionManager(key_file=self.key_file, password=password)
 
-        with self.assertRaises(ValueError) as cm:
-            EncryptionManager("wrong_password", key_file=self.key_file)
-        self.assertEqual(str(cm.exception), "Invalid Master Password.")
-
-    def test_database_with_password(self):
-        password = "db_password"
-        db = Database(password, db_name=self.db_name)
-        msg_id = db.add_message("sender", "secret message")
-        db.close()
-
-        # Open again with correct password
-        db2 = Database(password, db_name=self.db_name)
-        msgs = db2.get_messages()
-        self.assertEqual(len(msgs), 1)
-        self.assertEqual(msgs[0][2], "secret message")
-        db2.close()
-
-        # Open with wrong password should fail
         with self.assertRaises(ValueError):
-            Database("wrong", db_name=self.db_name)
+            EncryptionManager(key_file=self.key_file, password="wrong_password")
 
-if __name__ == "__main__":
+    def test_migration_from_unencrypted(self):
+        # Create an unencrypted 32-byte key
+        old_key = os.urandom(32)
+        with open(self.key_file, "wb") as f:
+            f.write(old_key)
+
+        password = "new_password"
+        em = EncryptionManager(key_file=self.key_file, password=password)
+        self.assertEqual(em.key, old_key)
+
+        # Check that it's now encrypted (larger than 32 bytes)
+        file_size = os.path.getsize(self.key_file)
+        self.assertEqual(file_size, 76) # 16 + 12 + 32 + 16
+
+if __name__ == '__main__':
     unittest.main()

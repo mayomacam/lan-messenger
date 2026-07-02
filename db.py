@@ -7,15 +7,17 @@ import base64
 import functools
 from typing import List, Tuple
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 
 class EncryptionManager:
-    def __init__(self, password: str, key_file=".master.key"):
+    def __init__(self, key_file=".master.key", password=None):
         self.key_file = key_file
-        self.key = self._load_or_generate_key(password)
-        self.aesgcm = AESGCM(self.key)
+        self.key = None
+        self.aesgcm = None
+        if password:
+            self.unlock(password)
 
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         kdf = PBKDF2HMAC(
@@ -27,46 +29,60 @@ class EncryptionManager:
         )
         return kdf.derive(password.encode())
 
-    def _load_or_generate_key(self, password: str):
+    def unlock(self, password: str):
+        """Unlocks the master key using the provided password."""
         if os.path.exists(self.key_file):
             with open(self.key_file, "rb") as f:
                 data = f.read()
-                if len(data) < 28: # Salt(16) + Nonce(12)
-                    raise ValueError("Master key file is corrupted or too short.")
-                salt = data[:16]
-                nonce = data[16:28]
-                encrypted_key = data[28:]
 
-                derived_key = self._derive_key(password, salt)
-                kek = AESGCM(derived_key) # Key Encryption Key
+            # Migration check: if file is exactly 32 bytes, it's an old unencrypted key
+            if len(data) == 32:
+                self.key = data
+                # Re-save encrypted
+                self._save_encrypted_key(password, self.key)
+            elif len(data) != 76:
+                raise ValueError("Corrupted key file: invalid file size.")
+            else:
                 try:
-                    return kek.decrypt(nonce, encrypted_key, None)
-                except Exception:
-                    raise ValueError("Invalid Master Password.")
+                    # Format: salt(16) + nonce(12) + encrypted_key(32 + 16 for tag) = 76 bytes
+                    salt = data[:16]
+                    nonce = data[16:28]
+                    ciphertext = data[28:]
+
+                    pw_key = self._derive_key(password, salt)
+                    aesgcm_pw = AESGCM(pw_key)
+                    self.key = aesgcm_pw.decrypt(nonce, ciphertext, None)
+                except Exception as e:
+                    raise ValueError("Invalid password or corrupted key file.") from e
         else:
-            # Generate a new random master key
-            master_key = AESGCM.generate_key(bit_length=256)
-            salt = os.urandom(16)
-            nonce = os.urandom(12)
+            # Generate new key
+            self.key = AESGCM.generate_key(bit_length=256)
+            self._save_encrypted_key(password, self.key)
 
-            derived_key = self._derive_key(password, salt)
-            kek = AESGCM(derived_key)
-            encrypted_key = kek.encrypt(nonce, master_key, None)
+        self.aesgcm = AESGCM(self.key)
 
+    def _save_encrypted_key(self, password: str, key: bytes):
+        salt = os.urandom(16)
+        nonce = os.urandom(12)
+        pw_key = self._derive_key(password, salt)
+        aesgcm_pw = AESGCM(pw_key)
+        ciphertext = aesgcm_pw.encrypt(nonce, key, None)
+
+        data = salt + nonce + ciphertext
+        try:
+            fd = os.open(self.key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+        except Exception:
+            with open(self.key_file, "wb") as f:
+                f.write(data)
             try:
-                fd = os.open(self.key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with open(fd, "wb") as f:
-                    f.write(salt + nonce + encrypted_key)
+                os.chmod(self.key_file, 0o600)
             except Exception:
-                with open(self.key_file, "wb") as f:
-                    f.write(salt + nonce + encrypted_key)
-                try:
-                    os.chmod(self.key_file, 0o600)
-                except Exception:
-                    pass
-            return master_key
+                pass
 
     def encrypt(self, data: str) -> str:
+        if not self.aesgcm: return data # Return plaintext if locked (should not happen in normal flow)
         if not data: return ""
         nonce = os.urandom(12)
         ciphertext = self.aesgcm.encrypt(nonce, data.encode(), None)
@@ -74,6 +90,7 @@ class EncryptionManager:
 
     @functools.lru_cache(maxsize=1024)
     def decrypt(self, encrypted_data: str) -> str:
+        if not self.aesgcm: return encrypted_data
         if not encrypted_data: return ""
         if not encrypted_data.startswith("enc:"):
             return encrypted_data
@@ -86,10 +103,10 @@ class EncryptionManager:
             return "[Decryption Failed]"
 
 class Database:
-    def __init__(self, password: str, db_name="lan_messenger.db"):
+    def __init__(self, password, db_name="lan_messenger.db", key_file=".master.key"):
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
         self.lock = threading.Lock()
-        self.cipher = EncryptionManager(password)
+        self.cipher = EncryptionManager(password=password, key_file=key_file)
         self._enable_wal_mode()
         self.create_tables()
 
@@ -151,7 +168,7 @@ class Database:
             if 'expires_at' not in columns:
                 cursor.execute("ALTER TABLE files ADD COLUMN expires_at REAL")
 
-            # Trusted Peers table
+            # Trusted Peers table: ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trusted_peers (
                     ip TEXT PRIMARY KEY,
@@ -162,12 +179,15 @@ class Database:
                     can_chat BOOLEAN DEFAULT 1,
                     can_list_files BOOLEAN DEFAULT 1,
                     can_download_files BOOLEAN DEFAULT 1,
-                    last_seen REAL
+                    last_seen REAL,
+                    is_verified INTEGER DEFAULT 0
                 )
             """)
             # Migration for existing installations
             cursor.execute("PRAGMA table_info(trusted_peers)")
             tp_columns = [info[1] for info in cursor.fetchall()]
+            if 'is_verified' not in tp_columns:
+                cursor.execute("ALTER TABLE trusted_peers ADD COLUMN is_verified INTEGER DEFAULT 0")
             if 'username' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN username TEXT")
             if 'trust_level' not in tp_columns:
@@ -181,7 +201,7 @@ class Database:
             if 'can_download_files' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files BOOLEAN DEFAULT 1")
 
-            # Audit Logs table
+            # Audit Logs table: id, event_type, details, timestamp
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,10 +240,10 @@ class Database:
                     SELECT id, sender, content, timestamp, is_deleted, recipient, expires_at
                     FROM messages
                     WHERE is_deleted = 0
-                    AND recipient = ?
+                    AND (recipient = ? OR (sender = ? AND recipient IS NOT NULL))
                     AND (expires_at IS NULL OR expires_at > ?)
                     ORDER BY timestamp DESC LIMIT ?
-                """, (peer_ip, now, limit))
+                """, (peer_ip, peer_ip, now, limit))
             else:
                 cursor = self.conn.execute("""
                     SELECT id, sender, content, timestamp, is_deleted, recipient, expires_at
@@ -314,92 +334,88 @@ class Database:
         now = time.time()
         with self.lock:
             with self.conn:
-                cursor = self.conn.execute("SELECT trust_level, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+                cursor = self.conn.execute("SELECT trust_level FROM trusted_peers WHERE ip = ?", (ip,))
                 row = cursor.fetchone()
 
                 if row:
                     final_trust = trust_level if trust_level is not None else row[0]
                     self.conn.execute("""
-                        UPDATE trusted_peers SET
-                            username = ?,
-                            fingerprint = ?,
-                            trust_level = ?,
-                            last_seen = ?
+                        UPDATE trusted_peers SET username = ?, fingerprint = ?, trust_level = ?, last_seen = ?
                         WHERE ip = ?
                     """, (username, fingerprint, final_trust, now, ip))
                 else:
                     final_trust = trust_level if trust_level is not None else 'untrusted'
                     self.conn.execute("""
-                        INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen, can_chat, can_list_files, can_download_files, is_blocked)
-                        VALUES (?, ?, ?, ?, ?, 1, 1, 1, 0)
+                        INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
+                        VALUES (?, ?, ?, ?, ?)
                     """, (ip, username, fingerprint, final_trust, now))
-
-    def get_peer_permissions(self, ip: str) -> dict:
-        with self.lock:
-            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
-            row = cursor.fetchone()
-            if row:
-                return {
-                    'can_chat': bool(row[0]),
-                    'can_list_files': bool(row[1]),
-                    'can_download_files': bool(row[2]),
-                    'is_blocked': bool(row[3])
-                }
-            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
-
-    def update_peer_permissions(self, ip: str, perms: dict):
-        with self.lock:
-            with self.conn:
-                self.conn.execute("""
-                    UPDATE trusted_peers SET
-                        can_chat = ?, can_list_files = ?, can_download_files = ?, is_blocked = ?
-                    WHERE ip = ?
-                """, (int(perms.get('can_chat', True)),
-                      int(perms.get('can_list_files', True)),
-                      int(perms.get('can_download_files', True)),
-                      int(perms.get('is_blocked', False)), ip))
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
             cursor = self.conn.execute("""
-                SELECT ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen
+                SELECT ip, username, fingerprint, trust_level, is_blocked, can_chat, can_list_files, can_download_files, last_seen, is_verified
                 FROM trusted_peers WHERE ip = ?
             """, (ip,))
             return cursor.fetchone()
 
-    def get_peer_trust_levels(self, ips: List[str]) -> dict:
-        ips_list = list(ips)
-        if not ips_list:
-            return {}
-        placeholders = ",".join(["?"] * len(ips_list))
+    def get_peer_permissions(self, ip: str) -> dict:
+        peer = self.get_trusted_peer(ip)
+        if not peer:
+            return {'is_blocked': 0, 'can_chat': 1, 'can_list_files': 1, 'can_download_files': 1, 'is_verified': 0}
+        return {
+            'is_blocked': peer[4],
+            'can_chat': peer[5],
+            'can_list_files': peer[6],
+            'can_download_files': peer[7],
+            'is_verified': peer[9]
+        }
+
+    def update_peer_permissions(self, ip: str, permissions: dict):
         with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, trust_level FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
+            with self.conn:
+                self.conn.execute("""
+                    UPDATE trusted_peers
+                    SET is_blocked = ?, can_chat = ?, can_list_files = ?, can_download_files = ?, is_verified = ?
+                    WHERE ip = ?
+                """, (
+                    permissions.get('is_blocked', 0),
+                    permissions.get('can_chat', 1),
+                    permissions.get('can_list_files', 1),
+                    permissions.get('can_download_files', 1),
+                    permissions.get('is_verified', 0),
+                    ip
+                ))
+
+    def get_peer_trust_levels(self, ips: List[str]) -> dict:
+        if not ips: return {}
+        placeholders = ",".join(["?"] * len(ips))
+        with self.lock:
+            cursor = self.conn.execute(f"SELECT ip, trust_level FROM trusted_peers WHERE ip IN ({placeholders})", ips)
             return {row[0]: row[1] for row in cursor.fetchall()}
 
     def get_peers_permissions(self, ips: List[str]) -> dict:
-        ips_list = list(ips)
-        if not ips_list:
-            return {}
-        placeholders = ",".join(["?"] * len(ips_list))
+        if not ips: return {}
+        placeholders = ",".join(["?"] * len(ips))
         with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
-            return {row[0]: {
-                'can_chat': bool(row[1]),
-                'can_list_files': bool(row[2]),
-                'can_download_files': bool(row[3]),
-                'is_blocked': bool(row[4])
-            } for row in cursor.fetchall()}
+            cursor = self.conn.execute(f"""
+                SELECT ip, can_chat, can_list_files, can_download_files, is_blocked, is_verified
+                FROM trusted_peers WHERE ip IN ({placeholders})
+            """, ips)
+            results = {}
+            for row in cursor.fetchall():
+                results[row[0]] = {
+                    'can_chat': bool(row[1]),
+                    'can_list_files': bool(row[2]),
+                    'can_download_files': bool(row[3]),
+                    'is_blocked': bool(row[4]),
+                    'is_verified': bool(row[5])
+                }
+            return results
 
     def update_peer_trust(self, ip: str, trust_level: str):
         with self.lock:
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
-
-    def is_peer_blocked(self, ip: str) -> bool:
-        with self.lock:
-            cursor = self.conn.execute("SELECT is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
-            row = cursor.fetchone()
-            return bool(row[0]) if row else False
 
     def add_audit_log(self, event_type: str, details: str):
         timestamp = time.time()
