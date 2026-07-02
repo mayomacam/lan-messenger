@@ -63,10 +63,12 @@ class TestUILock(unittest.TestCase):
 
     def test_manual_unlock(self):
         app = LANMessengerApp.__new__(LANMessengerApp)
-        app.master_password = "secure_pass"
+        import hashlib
+        app.password_salt = "test_salt"
+        app.password_hash = hashlib.sha256(("secure_pass" + app.password_salt).encode()).hexdigest()
         app.locked = True
         app.reset_inactivity = lambda: None
-        app.logger = type('MockLogger', (), {'log': lambda self, x, y: None})()
+        app.logger = type('MockLogger', (), {'log': lambda self, x, y: None})() 
 
         # Successful unlock
         self.assertTrue(app.manual_unlock("secure_pass"))
