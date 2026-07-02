@@ -789,6 +789,12 @@ class LANMessengerApp(ctk.CTk):
         self.msg_entry.delete(0, "end")
         self.load_chat_history()
 
+    def open_security_dialog(self, ip, name):
+        def on_update():
+            self._last_peers_snapshot = ""
+            self.refresh_peers()
+        PeerSecurityDialog(self, self.db, ip, name, on_update)
+
     def open_private_chat(self, ip, name):
         # Find if we already have a tab for this IP
         tab_name = None

@@ -111,6 +111,9 @@ class DiscoveryManager:
 class NetworkManager:
     def __init__(self, db, port, callback_update_ui=None, auth_token=None, allowed_ips=None):
         self.db = db
+        # Ensure audit logger is initialized for this database
+        if self.db:
+            audit.init_logger(self.db)
         self.port = port
         self.callback = callback_update_ui
         self.auth_token = auth_token
@@ -271,6 +274,8 @@ class NetworkManager:
 
     def handle_client(self, client, addr):
         """Process incoming client packets with optional IP whitelist and token verification."""
+        if not audit.get_logger():
+             audit.init_logger(self.db)
         logger = audit.get_logger()
         try:
             client.settimeout(10)
