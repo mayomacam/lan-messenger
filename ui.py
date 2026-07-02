@@ -131,6 +131,7 @@ class LockScreen(ctk.CTkFrame):
         self.db = db
         self.on_unlock = on_unlock
         self.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.grab_set()
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure((0, 1, 2, 3), weight=1)
