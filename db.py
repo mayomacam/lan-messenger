@@ -339,6 +339,7 @@ class Database:
 
         with self.lock:
             with self.conn:
+                self.conn.execute("INSERT OR IGNORE INTO trusted_peers (ip) VALUES (?)", (ip,))
                 self.conn.execute(query, tuple(values))
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
