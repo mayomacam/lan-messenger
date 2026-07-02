@@ -21,9 +21,11 @@ class TestUILockLogic(unittest.TestCase):
         self.db_file = "test_ui_lock.db"
         if os.path.exists(self.db_file):
             os.remove(self.db_file)
-        # Force remove .master.key to ensure clean state
-        if os.path.exists(".master.key"):
-            os.remove(".master.key")
+        # Force remove .test_master.key to ensure clean state
+        if os.path.exists(".test_master.key"):
+            os.remove(".test_master.key")
+        from db import EncryptionManager
+        EncryptionManager.__init__.__defaults__ = (".test_master.key",)
         self.db = Database(self.db_file)
 
     def tearDown(self):
