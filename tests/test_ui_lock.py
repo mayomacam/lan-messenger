@@ -32,7 +32,9 @@ class TestUILock(unittest.TestCase):
 
         # Test the initial_unlock method directly
         app = LANMessengerApp.__new__(LANMessengerApp)
-        app.master_password = None
+        app.db_name = self.db_name
+        app.key_file = self.key_file
+        app.password_hash = None
         app.db = None
         app.withdraw = lambda: None
         app.deiconify = lambda: None
@@ -41,7 +43,7 @@ class TestUILock(unittest.TestCase):
         # Case 1: Correct Password
         mock_dialog = MockDialog(None, None)
         app.initial_unlock(password, mock_dialog)
-        self.assertEqual(app.master_password, password)
+        self.assertIsNotNone(app.password_hash)
         self.assertIsNotNone(app.db)
         app.db.close()
 
