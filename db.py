@@ -14,7 +14,6 @@ from cryptography.hazmat.backends import default_backend
 class EncryptionManager:
     def __init__(self, password: str, key_file=".master.key"):
         self.key_file = key_file
-        self.password = password
         self.key = self._load_or_generate_key(password)
         self.aesgcm = AESGCM(self.key)
 
