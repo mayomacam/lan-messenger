@@ -139,14 +139,24 @@ class PasswordDialog(ctk.CTkToplevel):
     def on_cancel(self):
         self.destroy()
 
-class LockScreen(ctk.CTkToplevel):
+class LockScreen(ctk.CTkFrame):
     def __init__(self, parent, password_callback):
-        super().__init__(parent)
-        self.title("Application Locked")
-        self.geometry(f"{parent.winfo_width()}x{parent.winfo_height()}+{parent.winfo_x()}+{parent.winfo_y()}")
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
+        super().__init__(parent, fg_color="#1a1a1a")
         self.password_callback = password_callback
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 4), weight=1)
+
+        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
+
+        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
+        self.entry.grid(row=2, column=0, pady=10)
+        self.entry.bind("<Return>", self.on_unlock)
+
+        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
+        self.unlock_btn.grid(row=3, column=0, pady=20)
+
+        self.entry.focus_set()
 
         self.configure(fg_color="#1a1a1a")
         self.grid_columnconfigure(0, weight=1)
