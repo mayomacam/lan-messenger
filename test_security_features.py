@@ -56,7 +56,7 @@ class TestSecurityFeatures(unittest.TestCase):
                 # In some OS/circumstances, recv might be needed to see the drop
                 data = s.recv(1024)
                 self.assertEqual(data, b"", "Connection should have been closed by server")
-            except (ConnectionResetError, socket.timeout, BrokenPipeError):
+            except (ConnectionResetError, BrokenPipeError):
                 pass # Expected
 
     def test_02_unauthorized_chat(self):
