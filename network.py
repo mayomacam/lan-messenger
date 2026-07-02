@@ -278,7 +278,7 @@ class NetworkManager:
             client.settimeout(10)
 
             # Granular Access Control: Check if blocked
-            permissions = self.db.get_peer_permissions(addr[0])
+            permissions = self.db.get_peer_permissions(addr[0]) if self.db else {'can_chat': 1, 'can_list_files': 1, 'can_download_files': 1, 'is_blocked': 0}
             if permissions.get('is_blocked'):
                 if logger: logger.log("SECURITY_ALERT", f"Request from blocked peer {addr[0]} rejected.")
                 return
