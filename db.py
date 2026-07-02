@@ -84,6 +84,8 @@ class EncryptionManager:
     def encrypt(self, data: str) -> str:
         if not self.aesgcm: return data # Return plaintext if locked (should not happen in normal flow)
         if not data: return ""
+        if self.is_locked():
+            raise RuntimeError("Database is locked.")
         nonce = os.urandom(12)
         ciphertext = self.aesgcm.encrypt(nonce, data.encode(), None)
         return "enc:" + base64.b64encode(nonce + ciphertext).decode()
@@ -94,6 +96,8 @@ class EncryptionManager:
         if not encrypted_data: return ""
         if not encrypted_data.startswith("enc:"):
             return encrypted_data
+        if self.is_locked():
+            return "[Locked]"
         try:
             raw_data = base64.b64decode(encrypted_data[4:])
             nonce = raw_data[:12]
@@ -109,6 +113,21 @@ class Database:
         self.cipher = EncryptionManager(password=password, key_file=key_file)
         self._enable_wal_mode()
         self.create_tables()
+
+    def is_locked(self) -> bool:
+        return self.cipher.is_locked()
+
+    def needs_setup(self) -> bool:
+        return self.cipher.needs_setup()
+
+    def setup(self, password: str):
+        self.cipher.setup(password)
+
+    def unlock(self, password: str) -> bool:
+        return self.cipher.unlock(password)
+
+    def lock_db(self):
+        self.cipher.lock()
 
     def _enable_wal_mode(self):
         """Enable Write-Ahead Logging for better concurrency and performance."""

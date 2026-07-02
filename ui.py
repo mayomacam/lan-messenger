@@ -243,13 +243,70 @@ class LockScreen(ctk.CTkFrame):
             self.entry.delete(0, "end")
             self.entry.configure(placeholder_text="Invalid Password!", placeholder_text_color="red")
 
+class LockScreen(ctk.CTkFrame):
+    def __init__(self, parent, db, on_unlock):
+        super().__init__(parent, fg_color=parent._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"]))
+        self.db = db
+        self.on_unlock = on_unlock
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.grab_set()
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 1, 2, 3), weight=1)
+
+        inner_frame = ctk.CTkFrame(self)
+        inner_frame.grid(row=1, column=0, padx=20, pady=20)
+
+        self.title_label = ctk.CTkLabel(inner_frame, text="Application Locked", font=("Arial", 24, "bold"))
+        self.title_label.pack(pady=20, padx=40)
+
+        self.info_label = ctk.CTkLabel(inner_frame, text="Please enter your Master Password")
+        self.info_label.pack(pady=10)
+
+        self.password_entry = ctk.CTkEntry(inner_frame, show="*", width=250, placeholder_text="Master Password")
+        self.password_entry.pack(pady=10, padx=40)
+        self.password_entry.bind("<Return>", lambda e: self.attempt_unlock())
+
+        self.btn = ctk.CTkButton(inner_frame, text="Unlock", command=self.attempt_unlock)
+        self.btn.pack(pady=20)
+
+        if self.db.needs_setup():
+            self.title_label.configure(text="Initial Security Setup")
+            self.info_label.configure(text="Create a Master Password to protect your database")
+            self.btn.configure(text="Setup & Unlock")
+
+        self.password_entry.focus_set()
+
+    def attempt_unlock(self):
+        password = self.password_entry.get()
+        if not password:
+            return
+
+        if self.db.needs_setup():
+            self.db.setup(password)
+            audit.get_logger().log("MASTER_PASSWORD_SETUP", "Initial master password configured.")
+            self.on_unlock()
+            self.destroy()
+        else:
+            if self.db.unlock(password):
+                audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked.")
+                self.on_unlock()
+                self.destroy()
+            else:
+                audit.get_logger().log("INVALID_PASSWORD_ATTEMPT", "Failed unlock attempt.")
+                self.info_label.configure(text="Invalid Password! Try again.", text_color="red")
+                self.password_entry.delete(0, "end")
+
 class LANMessengerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.withdraw() # Hide main window until unlocked
         self.title("LAN Messenger")
         self.geometry("1100x700")
-        self.withdraw()
+
+        self._chat_history_after_id = None
+        self._lock_timer_id = None
+        self._inactivity_timeout = 300000 # 5 minutes in ms
 
         # Load Settings
         self.settings = load_settings()
@@ -330,6 +387,15 @@ class LANMessengerApp(ctk.CTk):
         # UI Components
         self.create_sidebar()
         self.create_main_area()
+
+        # App Locking
+        self.lock_screen = None
+        self.check_lock()
+
+        # Inactivity tracking
+        self.bind("<Any-KeyPress>", self._reset_lock_timer)
+        self.bind("<Any-Button>", self._reset_lock_timer)
+        self._reset_lock_timer()
 
         # Periodic Updates
         self.after(2000, self.refresh_peers)
@@ -849,6 +915,10 @@ class LANMessengerApp(ctk.CTk):
         self.load_chat_history(debounce=False)
         self.search_entry.focus_set()
 
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+
     def load_chat_history(self, debounce=True):
         """Debounced global chat refresh with lazy loading."""
         if not self.winfo_exists():
@@ -1282,6 +1352,48 @@ class LANMessengerApp(ctk.CTk):
 
         if self.winfo_exists():
             self.after(0, update)
+
+    def start_download(self, ip, path, is_folder):
+        if is_folder:
+            self.file_manager.download_folder(ip, path)
+        else:
+            self.file_manager.download_file(ip, path)
+
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, self.db, ip, name, self.logger)
+
+    def check_lock(self):
+        if self.db.is_locked():
+            if not self.lock_screen:
+                self.lock_screen = LockScreen(self, self.db, self.after_unlock)
+        else:
+            if self.lock_screen:
+                self.lock_screen.destroy()
+                self.lock_screen = None
+
+    def after_unlock(self):
+        self.lock_screen = None
+        self.load_chat_history()
+        self.refresh_peers()
+        self._reset_lock_timer()
+
+    def lock_app(self):
+        if not self.db.is_locked():
+            self.db.lock_db()
+            self.logger.log("APP_LOCKED", "Application manually locked.")
+            self.check_lock()
+
+    def _reset_lock_timer(self, event=None):
+        if self._lock_timer_id:
+            self.after_cancel(self._lock_timer_id)
+        if not self.db.is_locked():
+            self._lock_timer_id = self.after(self._inactivity_timeout, self._on_inactivity)
+
+    def _on_inactivity(self):
+        if not self.db.is_locked():
+            self.db.lock_db()
+            self.logger.log("APP_LOCKED", "Application locked due to inactivity.")
+            self.check_lock()
 
     def open_settings(self):
         dialog = ctk.CTkToplevel(self)
