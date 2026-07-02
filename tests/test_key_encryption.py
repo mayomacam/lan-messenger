@@ -1,63 +1,51 @@
-
 import os
-import shutil
+import unittest
 from db import EncryptionManager
 
-def test_encryption_manager():
-    test_key_file = ".test_master.key"
-    if os.path.exists(test_key_file):
-        os.remove(test_key_file)
+class TestKeyEncryption(unittest.TestCase):
+    def setUp(self):
+        self.key_file = ".test_master.key"
+        if os.path.exists(self.key_file):
+            os.remove(self.key_file)
 
-    password = "SuperSecurePassword123"
-    em = EncryptionManager(key_file=test_key_file)
+    def tearDown(self):
+        if os.path.exists(self.key_file):
+            os.remove(self.key_file)
 
-    print("Testing needs_setup...")
-    assert em.needs_setup() == True
-    assert em.is_locked() == True
+    def test_encryption_decryption_cycle(self):
+        password = "secure_password123"
+        em = EncryptionManager(key_file=self.key_file, password=password)
 
-    print("Testing setup...")
-    em.setup(password)
-    assert em.needs_setup() == False
-    assert em.is_locked() == False
+        test_data = "Hello World"
+        encrypted = em.encrypt(test_data)
+        self.assertNotEqual(test_data, encrypted)
+        self.assertTrue(encrypted.startswith("enc:"))
 
-    test_data = "Hello, secure world!"
-    encrypted = em.encrypt(test_data)
-    print(f"Encrypted data: {encrypted}")
-    assert encrypted.startswith("enc:")
+        # New manager instance with same password
+        em2 = EncryptionManager(key_file=self.key_file, password=password)
+        decrypted = em2.decrypt(encrypted)
+        self.assertEqual(test_data, decrypted)
 
-    decrypted = em.decrypt(encrypted)
-    print(f"Decrypted data: {decrypted}")
-    assert decrypted == test_data
+    def test_invalid_password(self):
+        password = "correct_password"
+        EncryptionManager(key_file=self.key_file, password=password)
 
-    print("Testing persistence and unlocking...")
-    em2 = EncryptionManager(key_file=test_key_file)
-    assert em2.is_locked() == True
+        with self.assertRaises(ValueError):
+            EncryptionManager(key_file=self.key_file, password="wrong_password")
 
-    print("Testing wrong password...")
-    assert em2.unlock("wrong_password") == False
-    assert em2.is_locked() == True
+    def test_migration_from_unencrypted(self):
+        # Create an unencrypted 32-byte key
+        old_key = os.urandom(32)
+        with open(self.key_file, "wb") as f:
+            f.write(old_key)
 
-    print("Testing correct password...")
-    assert em2.unlock(password) == True
-    assert em2.is_locked() == False
+        password = "new_password"
+        em = EncryptionManager(key_file=self.key_file, password=password)
+        self.assertEqual(em.key, old_key)
 
-    decrypted2 = em2.decrypt(encrypted)
-    assert decrypted2 == test_data
-    print("Decryption with new manager instance successful!")
+        # Check that it's now encrypted (larger than 32 bytes)
+        file_size = os.path.getsize(self.key_file)
+        self.assertEqual(file_size, 76) # 16 + 12 + 32 + 16
 
-    print("Testing locked state behavior...")
-    em3 = EncryptionManager(key_file=test_key_file)
-    try:
-        em3.encrypt("some data")
-        assert False, "Should have raised RuntimeError"
-    except RuntimeError as e:
-        print(f"Caught expected error: {e}")
-
-    assert em3.decrypt(encrypted) == "[Locked]"
-
-    if os.path.exists(test_key_file):
-        os.remove(test_key_file)
-    print("\nALL ENCRYPTION TESTS PASSED!")
-
-if __name__ == "__main__":
-    test_encryption_manager()
+if __name__ == '__main__':
+    unittest.main()

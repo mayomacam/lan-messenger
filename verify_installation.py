@@ -1,30 +1,28 @@
-
-import sys
 import os
-from db import Database
+import sys
 
-def test_db():
+def verify():
     print("Testing Database...")
-    db_file = "test_verify_install.db"
-    if os.path.exists(db_file): os.remove(db_file)
-    if os.path.exists(".master.key"): os.remove(".master.key")
-
     try:
-        db = Database(db_file)
-        db.setup("test_password")
-        msg_id = db.add_message("System", "Verification test message")
-        if msg_id:
+        from db import Database
+        # Clean up any existing test artifacts
+        if os.path.exists("test_install.db"): os.remove("test_install.db")
+        if os.path.exists(".test_install.key"): os.remove(".test_install.key")
+
+        db = Database("test_password", db_name="test_install.db", key_file=".test_install.key")
+        db.add_message("System", "Installation Verified")
+        msgs = db.get_messages()
+        if len(msgs) > 0 and msgs[0][1] == "System":
             print("Database OK")
         else:
-            print("Database FAILED: No msg_id returned")
+            print("Database FAILED: Message retrieval error")
+
         db.close()
+        if os.path.exists("test_install.db"): os.remove("test_install.db")
+        if os.path.exists(".test_install.key"): os.remove(".test_install.key")
     except Exception as e:
         print(f"Database FAILED: {e}")
-    finally:
-        if os.path.exists(db_file): os.remove(db_file)
-        if os.path.exists(".master.key"): os.remove(".master.key")
 
-def test_imports():
     print("Testing Imports...")
     try:
         import customtkinter
@@ -32,8 +30,7 @@ def test_imports():
         import PIL
         print("Imports OK")
     except ImportError as e:
-        print(f"Import FAILED: {e}")
+        print(f"Imports FAILED: {e}")
 
 if __name__ == "__main__":
-    test_imports()
-    test_db()
+    verify()
