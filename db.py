@@ -40,6 +40,8 @@ class EncryptionManager:
                 self.key = data
                 # Re-save encrypted
                 self._save_encrypted_key(password, self.key)
+            elif len(data) != 76:
+                raise ValueError("Corrupted key file: invalid file size.")
             else:
                 try:
                     # Format: salt(16) + nonce(12) + encrypted_key(32 + 16 for tag) = 76 bytes
