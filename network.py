@@ -174,9 +174,12 @@ class NetworkManager:
                 client, addr = self.server_sock.accept()
 
                 # Pre-TLS Check: Drop connections from blocked IPs
-                permissions = self.db.get_peer_permissions(addr[0])
+                permissions = self.db.get_peer_permissions(addr[0]) if self.db else {'is_blocked': 0}
                 if permissions.get('is_blocked'):
                     print(f"[DEBUG] Blocking connection from blocked IP: {addr[0]}")
+                    logger = audit.get_logger()
+                    if logger:
+                        logger.log("SECURITY_ALERT", f"Pre-TLS connection from blocked IP {addr[0]} dropped.")
                     client.close()
                     continue
 
