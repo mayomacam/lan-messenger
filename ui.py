@@ -15,6 +15,67 @@ from network import NetworkManager, DiscoveryManager
 from file_transfer import FileTransferManager
 from config import load_settings, save_settings
 
+class MasterPasswordDialog(ctk.CTkToplevel):
+    def __init__(self, parent, callback):
+        super().__init__(parent)
+        self.title("Unlock LAN Messenger")
+        self.geometry("400x250")
+        self.callback = callback
+
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(self, text="Master Password Required", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, pady=(30, 10))
+        ctk.CTkLabel(self, text="Enter password to unlock the application and database.", font=ctk.CTkFont(size=12)).grid(row=1, column=0, pady=(0, 20))
+
+        self.password_entry = ctk.CTkEntry(self, placeholder_text="Master Password", show="*")
+        self.password_entry.grid(row=2, column=0, padx=50, pady=10, sticky="ew")
+        self.password_entry.bind("<Return>", self.on_submit)
+
+        self.submit_btn = ctk.CTkButton(self, text="Unlock", command=self.on_submit)
+        self.submit_btn.grid(row=3, column=0, pady=20)
+
+        self.after(100, lambda: self.password_entry.focus_set())
+        self.grab_set()
+
+    def on_submit(self, event=None):
+        password = self.password_entry.get()
+        if not password:
+            return
+        self.callback(password, self)
+
+    def on_cancel(self):
+        self.master.destroy()
+
+class LockScreen(ctk.CTkFrame):
+    def __init__(self, parent, unlock_callback):
+        super().__init__(parent, fg_color=("#DBDBDB", "#2B2B2B"))
+        self.unlock_callback = unlock_callback
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 4), weight=1)
+
+        ctk.CTkLabel(self, text="Application Locked", font=ctk.CTkFont(size=30, weight="bold")).grid(row=1, column=0, pady=20)
+
+        self.pass_entry = ctk.CTkEntry(self, placeholder_text="Master Password", show="*", width=300)
+        self.pass_entry.grid(row=2, column=0, pady=10)
+        self.pass_entry.bind("<Return>", self.on_unlock)
+
+        self.unlock_btn = ctk.CTkButton(self, text="Unlock App", command=self.on_unlock)
+        self.unlock_btn.grid(row=3, column=0, pady=20)
+
+        self.pass_entry.focus_set()
+
+    def on_unlock(self, event=None):
+        password = self.pass_entry.get()
+        if self.unlock_callback(password):
+            self.destroy()
+        else:
+            self.pass_entry.delete(0, "end")
+            messagebox.showerror("Error", "Invalid Password")
+
 class PeerSecurityDialog(ctk.CTkToplevel):
     def __init__(self, parent, db, peer_ip, peer_name, on_update_cb=None):
         super().__init__(parent)
@@ -185,6 +246,7 @@ class LockScreen(ctk.CTkFrame):
 class LANMessengerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self.withdraw() # Hide main window until unlocked
         self.title("LAN Messenger")
         self.geometry("1100x700")
         self.withdraw()
@@ -275,6 +337,8 @@ class LANMessengerApp(ctk.CTk):
         self.after(100, lambda: self.msg_entry.focus_set())
         self.bind("<Control-f>", self.focus_search)
         self.bind("<Control-F>", self.focus_search)
+        self.bind_all("<Any-KeyPress>", self.reset_inactivity)
+        self.bind_all("<Any-ButtonPress>", self.reset_inactivity)
 
         # Activity Tracking
         self.bind_all("<KeyPress>", self._update_activity)
@@ -412,8 +476,11 @@ class LANMessengerApp(ctk.CTk):
         self.peers_scroll = ctk.CTkScrollableFrame(self.sidebar_frame, width=180, label_text="Peers")
         self.peers_scroll.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
 
+        self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", fg_color="#e74c3c", hover_color="#c0392b", command=self.lock_app)
+        self.lock_btn.grid(row=4, column=0, padx=20, pady=5)
+
         self.settings_btn = ctk.CTkButton(self.sidebar_frame, text="Settings", command=self.open_settings)
-        self.settings_btn.grid(row=4, column=0, padx=20, pady=(20, 10))
+        self.settings_btn.grid(row=5, column=0, padx=20, pady=5)
 
         self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", command=self.lock_app, fg_color="#555555")
         self.lock_btn.grid(row=5, column=0, padx=20, pady=(0, 10))
@@ -422,6 +489,10 @@ class LANMessengerApp(ctk.CTk):
         self.add_peer_btn.grid(row=6, column=0, padx=20, pady=(0, 20))
 
         self.sidebar_frame.grid_rowconfigure(3, weight=1)
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
 
     def create_main_area(self):
         self.tabview = ctk.CTkTabview(self, command=self.on_tab_change)

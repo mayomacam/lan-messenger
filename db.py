@@ -437,3 +437,18 @@ class Database:
 
     def close(self):
         self.conn.close()
+
+    def get_peers_permissions(self, ips: List[str]) -> dict:
+        """Batch fetch permissions for multiple IPs."""
+        ips_list = list(ips)
+        if not ips_list:
+            return {}
+        placeholders = ",".join(["?"] * len(ips_list))
+        with self.lock:
+            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
+            return {row[0]: {
+                'can_chat': bool(row[1]),
+                'can_list_files': bool(row[2]),
+                'can_download_files': bool(row[3]),
+                'is_blocked': bool(row[4])
+            } for row in cursor.fetchall()}
