@@ -204,9 +204,15 @@ class LANMessengerApp(ctk.CTk):
     def initial_unlock(self, password, dialog):
         try:
             # Test password by trying to open database
-            temp_db = Database(password)
+            db_name = getattr(self, "db_name", "lan_messenger.db")
+            key_file = getattr(self, "key_file", ".master.key")
+            temp_db = Database(password, db_name=db_name, key_file=key_file)
             self.db = temp_db
-            self.master_password = password
+            
+            import hashlib, secrets
+            self.password_salt = secrets.token_hex(16)
+            self.password_hash = hashlib.sha256((password + self.password_salt).encode()).hexdigest()
+            
             dialog.destroy()
             self.deiconify()
             self.initialize_app()
