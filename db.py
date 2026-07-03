@@ -19,6 +19,13 @@ class EncryptionManager:
         if password:
             self.unlock(password)
 
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
+
+    def lock(self):
+        self.key = None
+        self.aesgcm = None
+
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
@@ -115,13 +122,15 @@ class Database:
         self.create_tables()
 
     def is_locked(self) -> bool:
+        """Check if the database is currently locked."""
         return self.cipher.is_locked()
 
     def needs_setup(self) -> bool:
-        return self.cipher.needs_setup()
+        """Check if the master key needs to be set up."""
+        return not os.path.exists(self.cipher.key_file)
 
     def setup(self, password: str):
-        self.cipher.setup(password)
+        self.cipher.unlock(password) # unlock will create key if not exist
 
     def unlock(self, password: str) -> bool:
         return self.cipher.unlock(password)
@@ -368,6 +377,8 @@ class Database:
                         INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
                         VALUES (?, ?, ?, ?, ?)
                     """, (ip, username, fingerprint, final_trust, now))
+            # Invalidate the permissions cache within the lock
+            self._get_peer_permissions_internal.cache_clear()
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
@@ -377,16 +388,28 @@ class Database:
             """, (ip,))
             return cursor.fetchone()
 
+    @functools.lru_cache(maxsize=128)
+    def _get_peer_permissions_internal(self, ip: str) -> tuple:
+        """Internal cached helper for permission lookups. Returns an immutable tuple."""
+        with self.lock:
+            cursor = self.conn.execute("""
+                SELECT can_chat, can_list_files, can_download_files, is_blocked, is_verified
+                FROM trusted_peers WHERE ip = ?
+            """, (ip,))
+            row = cursor.fetchone()
+            # Default permissions if peer is unknown
+            return row if row else (1, 1, 1, 0, 0)
+
     def get_peer_permissions(self, ip: str) -> dict:
-        peer = self.get_trusted_peer(ip)
-        if not peer:
-            return {'is_blocked': 0, 'can_chat': 1, 'can_list_files': 1, 'can_download_files': 1, 'is_verified': 0}
+        """Fetch peer permissions using a cache and returning a dictionary."""
+        # Using a cached internal helper that returns a tuple (immutable)
+        p = self._get_peer_permissions_internal(ip)
         return {
-            'is_blocked': peer[4],
-            'can_chat': peer[5],
-            'can_list_files': peer[6],
-            'can_download_files': peer[7],
-            'is_verified': peer[9]
+            'can_chat': bool(p[0]),
+            'can_list_files': bool(p[1]),
+            'can_download_files': bool(p[2]),
+            'is_blocked': bool(p[3]),
+            'is_verified': bool(p[4])
         }
 
     def update_peer_permissions(self, ip: str, permissions: dict):
@@ -404,6 +427,8 @@ class Database:
                     permissions.get('is_verified', 0),
                     ip
                 ))
+            # Invalidate the permissions cache within the lock
+            self._get_peer_permissions_internal.cache_clear()
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         if not ips: return {}
@@ -457,17 +482,3 @@ class Database:
     def close(self):
         self.conn.close()
 
-    def get_peers_permissions(self, ips: List[str]) -> dict:
-        """Batch fetch permissions for multiple IPs."""
-        ips_list = list(ips)
-        if not ips_list:
-            return {}
-        placeholders = ",".join(["?"] * len(ips_list))
-        with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
-            return {row[0]: {
-                'can_chat': bool(row[1]),
-                'can_list_files': bool(row[2]),
-                'can_download_files': bool(row[3]),
-                'is_blocked': bool(row[4])
-            } for row in cursor.fetchall()}
