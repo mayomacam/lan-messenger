@@ -33,3 +33,7 @@
 ## 2026-06-19 - Visual confirmation for background actions
 **Learning:** For actions that happen "behind the scenes" (like sharing a file or refreshing a log), users often feel uncertain if the action was actually registered. Replacing a static button label with temporary success feedback (e.g., "Shared!" or "Refreshed") provides immediate, non-disruptive confirmation.
 **Action:** Use temporary button label and color transitions (e.g., green '#2ecc71') to confirm successful asynchronous or background operations.
+
+## 2026-06-20 - UI Code Hygiene and UX Predictability
+**Learning:** Redundant class and method definitions in a UI file (like 'LockScreen' and 'focus_search' in 'ui.py') create "zombie" logic that can lead to unpredictable UX and subtle bugs where the wrong implementation is called. Consolidating these into single, canonical versions is a prerequisite for reliable UX.
+**Action:** Always scan for and deduplicate UI components and event handlers before implementing new UX features to ensure a stable foundation.
