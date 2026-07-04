@@ -5,6 +5,7 @@ import json
 import time
 import hashlib
 import functools
+import security_engine
 from pathlib import Path
 from ssl_utils import wrap_socket, get_peer_fingerprint
 import audit
@@ -116,27 +117,24 @@ class FileTransferManager:
         if not audit.get_logger():
             audit.init_logger(self.db)
         logger = audit.get_logger()
+        engine = security_engine.get_engine()
+
         try:
             client.settimeout(10)
 
             # Security check: granular permissions (is_blocked)
             perms = self.db.get_peer_permissions(addr[0])
             if perms.get('is_blocked'):
-                if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: Peer is blocked.")
+                msg = f"File transfer connection from {addr[0]} rejected: Peer is blocked."
+                if engine: engine.report_incident(addr[0], "UNAUTHORIZED_ACCESS", msg)
                 client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied: Blocked'}).encode())
                 return
 
             # IP whitelist check
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
-                if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: IP not allowed.")
+                msg = f"File transfer connection from {addr[0]} rejected: IP not allowed."
+                if engine: engine.report_incident(addr[0], "UNAUTHORIZED_ACCESS", msg)
                 client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())
-                return
-
-            # Check if peer is blocked
-            perms = self.db.get_peer_permissions(addr[0])
-            if perms.get('is_blocked'):
-                if logger: logger.log("SECURITY_ALERT", f"File transfer connection from blocked peer {addr[0]} rejected.")
-                client.sendall(json.dumps({'status': 'ERR', 'msg': 'Peer is blocked'}).encode())
                 return
 
             header_raw = client.recv(4096).decode()
@@ -146,17 +144,18 @@ class FileTransferManager:
             try:
                 req = json.loads(header_raw)
                 if not isinstance(req, dict):
-                     if logger: logger.log("SECURITY_ALERT", f"Malformed file request from {addr[0]}: Not a JSON object.")
+                     if engine: engine.report_incident(addr[0], "PROTOCOL_VIOLATION", f"Malformed file request from {addr[0]}: Not a JSON object.")
                      return
             except json.JSONDecodeError:
-                if logger: logger.log("SECURITY_ALERT", f"Malformed file request from {addr[0]}: Invalid JSON.")
+                if engine: engine.report_incident(addr[0], "PROTOCOL_VIOLATION", f"Malformed file request from {addr[0]}: Invalid JSON.")
                 print(f"[DEBUG] File server received invalid JSON header")
                 return
 
             # Simple token authentication if enabled
             if self.auth_token is not None:
                 if req.get('token') != self.auth_token:
-                    if logger: logger.log("AUTH_FAILURE", f"File transfer authentication failed for {addr[0]}.")
+                    msg = f"File transfer authentication failed for {addr[0]}."
+                    if engine: engine.report_incident(addr[0], "AUTH_FAILURE", msg)
                     client.sendall(json.dumps({'status': 'ERR', 'msg': 'Authentication failed'}).encode())
                     return
                 # token matches – continue processing
