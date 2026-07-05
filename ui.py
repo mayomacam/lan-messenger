@@ -48,34 +48,6 @@ class MasterPasswordDialog(ctk.CTkToplevel):
     def on_cancel(self):
         self.master.destroy()
 
-class LockScreen(ctk.CTkFrame):
-    def __init__(self, parent, unlock_callback):
-        super().__init__(parent, fg_color=("#DBDBDB", "#2B2B2B"))
-        self.unlock_callback = unlock_callback
-        self.place(relx=0, rely=0, relwidth=1, relheight=1)
-
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure((0, 4), weight=1)
-
-        ctk.CTkLabel(self, text="Application Locked", font=ctk.CTkFont(size=30, weight="bold")).grid(row=1, column=0, pady=20)
-
-        self.pass_entry = ctk.CTkEntry(self, placeholder_text="Master Password", show="*", width=300)
-        self.pass_entry.grid(row=2, column=0, pady=10)
-        self.pass_entry.bind("<Return>", self.on_unlock)
-
-        self.unlock_btn = ctk.CTkButton(self, text="Unlock App", command=self.on_unlock)
-        self.unlock_btn.grid(row=3, column=0, pady=20)
-
-        self.pass_entry.focus_set()
-
-    def on_unlock(self, event=None):
-        password = self.pass_entry.get()
-        if self.unlock_callback(password):
-            self.destroy()
-        else:
-            self.pass_entry.delete(0, "end")
-            messagebox.showerror("Error", "Invalid Password")
-
 class PeerSecurityDialog(ctk.CTkToplevel):
     def __init__(self, parent, db, peer_ip, peer_name, on_update_cb=None):
         super().__init__(parent)
@@ -108,8 +80,16 @@ class PeerSecurityDialog(ctk.CTkToplevel):
         peer_fp = self.peer_info[2] if self.peer_info else None
         safety_number = ssl_utils.get_safety_number(my_fp, peer_fp)
 
-        sn_display = ctk.CTkLabel(sn_frame, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
-        sn_display.pack(pady=5)
+        sn_container = ctk.CTkFrame(sn_frame, fg_color="transparent")
+        sn_container.pack(pady=5)
+
+        self.sn_display = ctk.CTkLabel(sn_container, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
+        self.sn_display.pack(side="left", padx=5)
+
+        self.copy_sn_btn = ctk.CTkButton(sn_container, text="Copy", width=60, height=20,
+                                    command=lambda: self.copy_safety_number(safety_number))
+        self.copy_sn_btn.pack(side="left", padx=5)
+
         ctk.CTkLabel(sn_frame, text="Verify this code with the peer out-of-band.", font=("Arial", 10, "italic")).pack(pady=(0, 10))
 
         # Verified Toggle
@@ -165,6 +145,16 @@ class PeerSecurityDialog(ctk.CTkToplevel):
             self.master.refresh_peers()
         self.destroy()
 
+    def copy_safety_number(self, sn):
+        self.clipboard_clear()
+        self.clipboard_append(sn)
+        self.copy_sn_btn.configure(text="Copied!", fg_color="#2ecc71")
+
+        def reset():
+            if self.copy_sn_btn.winfo_exists():
+                self.copy_sn_btn.configure(text="Copy", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(2000, reset)
+
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
@@ -199,49 +189,6 @@ class PasswordDialog(ctk.CTkToplevel):
 
     def on_cancel(self):
         self.destroy()
-
-class LockScreen(ctk.CTkFrame):
-    def __init__(self, parent, password_callback):
-        super().__init__(parent, fg_color="#1a1a1a")
-        self.password_callback = password_callback
-
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure((0, 4), weight=1)
-
-        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
-
-        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
-        self.entry.grid(row=2, column=0, pady=10)
-        self.entry.bind("<Return>", self.on_unlock)
-
-        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
-        self.unlock_btn.grid(row=3, column=0, pady=20)
-
-        self.entry.focus_set()
-
-        self.configure(fg_color="#1a1a1a")
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure((0, 4), weight=1)
-
-        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
-
-        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
-        self.entry.grid(row=2, column=0, pady=10)
-        self.entry.bind("<Return>", self.on_unlock)
-
-        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
-        self.unlock_btn.grid(row=3, column=0, pady=20)
-
-        self.entry.focus_set()
-        self.grab_set()
-
-    def on_unlock(self, event=None):
-        pw = self.entry.get()
-        if self.password_callback(pw):
-            self.destroy()
-        else:
-            self.entry.delete(0, "end")
-            self.entry.configure(placeholder_text="Invalid Password!", placeholder_text_color="red")
 
 class LockScreen(ctk.CTkFrame):
     def __init__(self, parent, db, on_unlock):
@@ -425,11 +372,6 @@ class LANMessengerApp(ctk.CTk):
             self.lock_app()
         self.after(10000, self._check_inactivity)
 
-    def lock_app(self):
-        if not self._locked:
-            self._locked = True
-            LockScreen(self, self._verify_unlock)
-
     def _verify_unlock(self, password):
         if password == self._master_password:
             self._locked = False
@@ -547,9 +489,6 @@ class LANMessengerApp(ctk.CTk):
 
         self.settings_btn = ctk.CTkButton(self.sidebar_frame, text="Settings", command=self.open_settings)
         self.settings_btn.grid(row=5, column=0, padx=20, pady=5)
-
-        self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", command=self.lock_app, fg_color="#555555")
-        self.lock_btn.grid(row=5, column=0, padx=20, pady=(0, 10))
 
         self.add_peer_btn = ctk.CTkButton(self.sidebar_frame, text="Info / Connect IP", command=self.add_manual_peer)
         self.add_peer_btn.grid(row=6, column=0, padx=20, pady=(0, 20))
@@ -686,6 +625,7 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display._textbox.tag_config("alert", foreground="#e74c3c", font=ctk.CTkFont(weight="bold"))
         self.audit_display._textbox.tag_config("warning", foreground="#e67e22", font=ctk.CTkFont(weight="bold"))
         self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
+        self.audit_display._textbox.tag_config("timestamp", foreground="#888888")
         self.audit_display._textbox.tag_config("center", justify='center')
 
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
@@ -713,17 +653,21 @@ class LANMessengerApp(ctk.CTk):
         if not logs:
             self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
         else:
-            lines = []
             for log in logs:
                 # log: (id, event_type, details, timestamp)
                 event_type = log[1]
                 ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-                lines.append(f"[{ts}] {event_type}: {log[2]}")
+                details = log[2]
 
-            if lines:
-                self.audit_display.insert("end", "\n".join(lines) + "\n")
-            else:
-                self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+                tag = "info"
+                if event_type in ["SECURITY_ALERT", "FILE_INTEGRITY_FAILURE", "FINGERPRINT_MISMATCH"]:
+                    tag = "alert"
+                elif event_type in ["AUTH_FAILURE", "INVALID_PASSWORD_ATTEMPT"]:
+                    tag = "warning"
+
+                self.audit_display.insert("end", f"[{ts}] ", "timestamp")
+                self.audit_display.insert("end", f"{event_type}: ", tag)
+                self.audit_display.insert("end", f"{details}\n")
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("1.0")

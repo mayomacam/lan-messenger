@@ -60,6 +60,7 @@ class EncryptionManager:
             self._save_encrypted_key(password, self.key)
 
         self.aesgcm = AESGCM(self.key)
+        return True
 
     def _save_encrypted_key(self, password: str, key: bytes):
         salt = os.urandom(16)
@@ -105,6 +106,20 @@ class EncryptionManager:
             return self.aesgcm.decrypt(nonce, ciphertext, None).decode()
         except Exception:
             return "[Decryption Failed]"
+
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
+
+    def needs_setup(self) -> bool:
+        return not os.path.exists(self.key_file)
+
+    def lock(self):
+        self.key = None
+        self.aesgcm = None
+        self.decrypt.cache_clear()
+
+    def setup(self, password: str):
+        self.unlock(password)
 
 class Database:
     def __init__(self, password, db_name="lan_messenger.db", key_file=".master.key"):
