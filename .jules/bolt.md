@@ -37,3 +37,7 @@
 ## 2025-05-24 - [UI Refresh Cycles with Debouncing and Lazy Loading]
 **Learning:** Polling loops and unconditioned UI updates (e.g., refreshing all chat tabs when only one is visible) are major performance sinks in GUI apps. Implementing visibility checks (lazy loading) and debouncing (throttling) ensures that CPU-intensive rendering and database queries only occur when necessary.
 **Action:** Always check widget visibility or tab state before performing heavy UI updates. Use a standard debounce pattern (e.g., 100ms) for high-frequency events to prevent UI lag.
+
+## 2025-05-25 - [Instance-level LRU Caching]
+**Learning:** Using `@functools.lru_cache` directly on instance methods can lead to memory leaks because the cache holds a strong reference to `self`, preventing garbage collection of the instance. Additionally, a class-level cache would share data across all instances, which might be incorrect if they connect to different databases.
+**Action:** Initialize the cache at the instance level within `__init__` by wrapping the method: `self.cached_method = functools.lru_cache(maxsize=N)(self.raw_method)`. This ensures the cache is tied to the instance lifecycle and context.

@@ -19,6 +19,21 @@ class EncryptionManager:
         if password:
             self.unlock(password)
 
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
+
+    def needs_setup(self) -> bool:
+        return not os.path.exists(self.key_file)
+
+    def setup(self, password: str):
+        self.key = AESGCM.generate_key(bit_length=256)
+        self._save_encrypted_key(password, self.key)
+        self.aesgcm = AESGCM(self.key)
+
+    def lock(self):
+        self.key = None
+        self.aesgcm = None
+
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
@@ -111,6 +126,8 @@ class Database:
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
         self.lock = threading.Lock()
         self.cipher = EncryptionManager(password=password, key_file=key_file)
+        # Instance-level cache to avoid memory leaks associated with @lru_cache on methods
+        self._get_peer_permissions_internal = functools.lru_cache(maxsize=128)(self._get_peer_permissions_internal_raw)
         self._enable_wal_mode()
         self.create_tables()
 
@@ -368,6 +385,7 @@ class Database:
                         INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
                         VALUES (?, ?, ?, ?, ?)
                     """, (ip, username, fingerprint, final_trust, now))
+            self._get_peer_permissions_internal.cache_clear()
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
@@ -377,16 +395,28 @@ class Database:
             """, (ip,))
             return cursor.fetchone()
 
+    def _get_peer_permissions_internal_raw(self, ip: str) -> Tuple:
+        """Internal helper for permissions lookup. Returns a tuple for immutability and hashing."""
+        with self.lock:
+            cursor = self.conn.execute("""
+                SELECT is_blocked, can_chat, can_list_files, can_download_files, is_verified
+                FROM trusted_peers WHERE ip = ?
+            """, (ip,))
+            row = cursor.fetchone()
+            if not row:
+                # Default permissions for unknown peers
+                return (0, 1, 1, 1, 0)
+            return row
+
     def get_peer_permissions(self, ip: str) -> dict:
-        peer = self.get_trusted_peer(ip)
-        if not peer:
-            return {'is_blocked': 0, 'can_chat': 1, 'can_list_files': 1, 'can_download_files': 1, 'is_verified': 0}
+        # Optimization: use instance-level LRU cache for high-frequency permission checks
+        perms = self._get_peer_permissions_internal(ip)
         return {
-            'is_blocked': peer[4],
-            'can_chat': peer[5],
-            'can_list_files': peer[6],
-            'can_download_files': peer[7],
-            'is_verified': peer[9]
+            'is_blocked': perms[0],
+            'can_chat': perms[1],
+            'can_list_files': perms[2],
+            'can_download_files': perms[3],
+            'is_verified': perms[4]
         }
 
     def update_peer_permissions(self, ip: str, permissions: dict):
@@ -404,6 +434,7 @@ class Database:
                     permissions.get('is_verified', 0),
                     ip
                 ))
+            self._get_peer_permissions_internal.cache_clear()
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         if not ips: return {}
@@ -435,6 +466,7 @@ class Database:
         with self.lock:
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
+            self._get_peer_permissions_internal.cache_clear()
 
     def add_audit_log(self, event_type: str, details: str):
         timestamp = time.time()
@@ -456,18 +488,3 @@ class Database:
 
     def close(self):
         self.conn.close()
-
-    def get_peers_permissions(self, ips: List[str]) -> dict:
-        """Batch fetch permissions for multiple IPs."""
-        ips_list = list(ips)
-        if not ips_list:
-            return {}
-        placeholders = ",".join(["?"] * len(ips_list))
-        with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
-            return {row[0]: {
-                'can_chat': bool(row[1]),
-                'can_list_files': bool(row[2]),
-                'can_download_files': bool(row[3]),
-                'is_blocked': bool(row[4])
-            } for row in cursor.fetchall()}
