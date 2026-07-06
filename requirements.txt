@@ -1,3 +1,5 @@
 customtkinter
 pyinstaller
 cryptography
+pyotp
+qrcode
