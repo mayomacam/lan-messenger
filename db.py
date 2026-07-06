@@ -19,6 +19,19 @@ class EncryptionManager:
         if password:
             self.unlock(password)
 
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
+
+    def needs_setup(self) -> bool:
+        return not os.path.exists(self.key_file)
+
+    def lock(self):
+        self.aesgcm = None
+        self.key = None
+
+    def setup(self, password: str):
+        self.unlock(password)
+
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
