@@ -686,6 +686,7 @@ class LANMessengerApp(ctk.CTk):
         self.audit_display._textbox.tag_config("alert", foreground="#e74c3c", font=ctk.CTkFont(weight="bold"))
         self.audit_display._textbox.tag_config("warning", foreground="#e67e22", font=ctk.CTkFont(weight="bold"))
         self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
+        self.audit_display._textbox.tag_config("timestamp", foreground="#888888")
         self.audit_display._textbox.tag_config("center", justify='center')
 
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
@@ -713,17 +714,21 @@ class LANMessengerApp(ctk.CTk):
         if not logs:
             self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
         else:
-            lines = []
+            # Map event types to tags
+            event_tags = {
+                "SECURITY_ALERT": "alert",
+                "FILE_INTEGRITY_FAILURE": "alert",
+                "AUTH_FAILURE": "warning"
+            }
+
             for log in logs:
                 # log: (id, event_type, details, timestamp)
                 event_type = log[1]
                 ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-                lines.append(f"[{ts}] {event_type}: {log[2]}")
+                tag = event_tags.get(event_type, "info")
 
-            if lines:
-                self.audit_display.insert("end", "\n".join(lines) + "\n")
-            else:
-                self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+                self.audit_display.insert("end", f"[{ts}] ", "timestamp")
+                self.audit_display.insert("end", f"{event_type}: {log[2]}\n", tag)
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("1.0")
