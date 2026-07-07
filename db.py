@@ -106,11 +106,26 @@ class EncryptionManager:
         except Exception:
             return "[Decryption Failed]"
 
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
+
+    def needs_setup(self) -> bool:
+        return not os.path.exists(self.key_file)
+
+    def lock(self):
+        self.key = None
+        self.aesgcm = None
+
+    def setup(self, password: str):
+        self.unlock(password)
+
 class Database:
     def __init__(self, password, db_name="lan_messenger.db", key_file=".master.key"):
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
         self.lock = threading.Lock()
         self.cipher = EncryptionManager(password=password, key_file=key_file)
+        # Initialize internal cache for peer permissions to avoid repeated DB hits
+        self._get_peer_permissions_internal = functools.lru_cache(maxsize=128)(self._get_peer_permissions_internal_raw)
         self._enable_wal_mode()
         self.create_tables()
 
@@ -352,6 +367,8 @@ class Database:
     def add_trusted_peer(self, ip: str, username: str, fingerprint: str, trust_level: str = None):
         now = time.time()
         with self.lock:
+            # Invalidate the permissions cache whenever peer data changes
+            self._get_peer_permissions_internal.cache_clear()
             with self.conn:
                 cursor = self.conn.execute("SELECT trust_level FROM trusted_peers WHERE ip = ?", (ip,))
                 row = cursor.fetchone()
@@ -377,7 +394,8 @@ class Database:
             """, (ip,))
             return cursor.fetchone()
 
-    def get_peer_permissions(self, ip: str) -> dict:
+    def _get_peer_permissions_internal_raw(self, ip: str) -> dict:
+        """Internal uncached helper to fetch peer permissions."""
         peer = self.get_trusted_peer(ip)
         if not peer:
             return {'is_blocked': 0, 'can_chat': 1, 'can_list_files': 1, 'can_download_files': 1, 'is_verified': 0}
@@ -389,8 +407,14 @@ class Database:
             'is_verified': peer[9]
         }
 
+    def get_peer_permissions(self, ip: str) -> dict:
+        """Get permissions for a peer, utilizing the LRU cache."""
+        return self._get_peer_permissions_internal(ip)
+
     def update_peer_permissions(self, ip: str, permissions: dict):
         with self.lock:
+            # Invalidate cache before update
+            self._get_peer_permissions_internal.cache_clear()
             with self.conn:
                 self.conn.execute("""
                     UPDATE trusted_peers
@@ -433,6 +457,8 @@ class Database:
 
     def update_peer_trust(self, ip: str, trust_level: str):
         with self.lock:
+            # Trust changes should also invalidate the permissions cache
+            self._get_peer_permissions_internal.cache_clear()
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
 
@@ -457,17 +483,3 @@ class Database:
     def close(self):
         self.conn.close()
 
-    def get_peers_permissions(self, ips: List[str]) -> dict:
-        """Batch fetch permissions for multiple IPs."""
-        ips_list = list(ips)
-        if not ips_list:
-            return {}
-        placeholders = ",".join(["?"] * len(ips_list))
-        with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
-            return {row[0]: {
-                'can_chat': bool(row[1]),
-                'can_list_files': bool(row[2]),
-                'can_download_files': bool(row[3]),
-                'is_blocked': bool(row[4])
-            } for row in cursor.fetchall()}

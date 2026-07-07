@@ -9,7 +9,7 @@ def test_concurrency():
     if os.path.exists(db_name):
         os.remove(db_name)
         
-    db = Database(db_name)
+    db = Database("password", db_name=db_name)
     
     def worker(name):
         for i in range(50):
