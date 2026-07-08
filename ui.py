@@ -322,10 +322,10 @@ class LANMessengerApp(ctk.CTk):
 
         self.audit_display = ctk.CTkTextbox(self.audit_tab, state="disabled")
         self.audit_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.audit_display._textbox.tag_config("alert", foreground="#e74c3c")
-        self.audit_display._textbox.tag_config("warning", foreground="#e67e22")
-        self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
-        self.audit_display._textbox.tag_config("center", justify="center")
+        self.audit_display.tag_config("alert", foreground="#e74c3c")
+        self.audit_display.tag_config("warning", foreground="#e67e22")
+        self.audit_display.tag_config("info", foreground="#2ecc71")
+        self.audit_display.tag_config("center", justify="center")
 
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
         self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
