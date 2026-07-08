@@ -773,8 +773,12 @@ class LANMessengerApp(ctk.CTk):
         PeerSecurityDialog(self, self.db, ip, name, self.refresh_peers)
 
     def refresh_peers(self):
-        # Update peer trust levels from DB in batch
-        trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
+        # Batch fetch peer data from DB to reduce lock contention and roundtrips
+        peer_ips = list(self.peers.keys())
+        trust_levels = self.db.get_peer_trust_levels(peer_ips)
+        all_perms = self.db.get_peers_permissions(peer_ips)
+
+        # Update internal state from batch results
         for ip in self.peers:
             self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
 
@@ -819,7 +823,7 @@ class LANMessengerApp(ctk.CTk):
 
             # Security button
             btn_sec = ctk.CTkButton(row, text="Sec", width=35, height=20, fg_color="#555555",
-                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+                              command=lambda i=ip, n=name: PeerSecurityDialog(self, self.db, i, n, self.refresh_peers))
             btn_sec.pack(side="right", padx=2)
 
             btn_browse = ctk.CTkButton(row, text="Browse", width=60, height=20,

@@ -454,6 +454,51 @@ class Database:
     def reap_expired_messages(self) -> int:
         return self.delete_expired_messages()
 
+    def get_peer_permissions(self, ip: str) -> dict:
+        """Returns a dictionary of peer permissions."""
+        with self.lock:
+            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'can_chat': bool(row[0]),
+                    'can_list_files': bool(row[1]),
+                    'can_download_files': bool(row[2]),
+                    'is_blocked': bool(row[3])
+                }
+            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
+
+    def get_peers_permissions(self, ips: List[str]) -> dict:
+        """Batch fetch granular permissions for multiple IPs."""
+        ips_list = list(ips)
+        if not ips_list:
+            return {}
+        placeholders = ",".join(["?"] * len(ips_list))
+        with self.lock:
+            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
+            results = {}
+            for row in cursor.fetchall():
+                results[row[0]] = {
+                    'can_chat': bool(row[1]),
+                    'can_list_files': bool(row[2]),
+                    'can_download_files': bool(row[3]),
+                    'is_blocked': bool(row[4])
+                }
+            return results
+
+    def update_peer_permissions(self, ip: str, perms: dict):
+        """Update granular permissions for a peer."""
+        with self.lock:
+            with self.conn:
+                self.conn.execute("""
+                    UPDATE trusted_peers SET
+                        can_chat = ?, can_list_files = ?, can_download_files = ?, is_blocked = ?
+                    WHERE ip = ?
+                """, (int(perms.get('can_chat', True)),
+                      int(perms.get('can_list_files', True)),
+                      int(perms.get('can_download_files', True)),
+                      int(perms.get('is_blocked', False)), ip))
+
     def close(self):
         self.conn.close()
 
