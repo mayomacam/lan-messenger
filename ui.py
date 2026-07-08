@@ -580,7 +580,7 @@ class LANMessengerApp(ctk.CTk):
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         self.input_frame.grid_columnconfigure(0, weight=1)
 
-        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message...")
+        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message... (Enter to send)")
         self.msg_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.msg_entry.bind("<Return>", self.send_message)
 
@@ -598,7 +598,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
         self.search_frame.grid_columnconfigure(0, weight=1)
 
-        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
+        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages... (Ctrl+F)")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
         self.search_entry.bind("<KeyRelease>", self.on_search_key)
@@ -607,7 +607,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
 
-        self.clear_search_btn = ctk.CTkButton(self.search_frame, text="X", width=30, fg_color="gray", command=self.clear_search)
+        self.clear_search_btn = ctk.CTkButton(self.search_frame, text="Clear", width=60, fg_color="gray", command=self.clear_search)
         self.clear_search_btn.grid(row=0, column=2, padx=5, pady=5)
 
         # Context Menu for Message Actions
