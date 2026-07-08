@@ -817,7 +817,7 @@ class LANMessengerApp(ctk.CTk):
 
             display = ctk.CTkTextbox(tab_frame, state="disabled")
             display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-            display._textbox.tag_config("center", justify='center')
+            display.tag_config("center", justify='center')
 
             input_frame = ctk.CTkFrame(tab_frame, height=50)
             input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
