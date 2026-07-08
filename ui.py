@@ -8,25 +8,329 @@ import time
 import shutil
 import json
 import audit
+import ssl_utils
 from concurrent.futures import ThreadPoolExecutor
 from db import Database
 from network import NetworkManager, DiscoveryManager
 from file_transfer import FileTransferManager
 from config import load_settings, save_settings
 
+class MasterPasswordDialog(ctk.CTkToplevel):
+    def __init__(self, parent, callback):
+        super().__init__(parent)
+        self.title("Unlock LAN Messenger")
+        self.geometry("400x250")
+        self.callback = callback
+
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(self, text="Master Password Required", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, pady=(30, 10))
+        ctk.CTkLabel(self, text="Enter password to unlock the application and database.", font=ctk.CTkFont(size=12)).grid(row=1, column=0, pady=(0, 20))
+
+        self.password_entry = ctk.CTkEntry(self, placeholder_text="Master Password", show="*")
+        self.password_entry.grid(row=2, column=0, padx=50, pady=10, sticky="ew")
+        self.password_entry.bind("<Return>", self.on_submit)
+
+        self.submit_btn = ctk.CTkButton(self, text="Unlock", command=self.on_submit)
+        self.submit_btn.grid(row=3, column=0, pady=20)
+
+        self.after(100, lambda: self.password_entry.focus_set())
+        self.grab_set()
+
+    def on_submit(self, event=None):
+        password = self.password_entry.get()
+        if not password:
+            return
+        self.callback(password, self)
+
+    def on_cancel(self):
+        self.master.destroy()
+
+class LockScreen(ctk.CTkFrame):
+    def __init__(self, parent, unlock_callback):
+        super().__init__(parent, fg_color=("#DBDBDB", "#2B2B2B"))
+        self.unlock_callback = unlock_callback
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 4), weight=1)
+
+        ctk.CTkLabel(self, text="Application Locked", font=ctk.CTkFont(size=30, weight="bold")).grid(row=1, column=0, pady=20)
+
+        self.pass_entry = ctk.CTkEntry(self, placeholder_text="Master Password", show="*", width=300)
+        self.pass_entry.grid(row=2, column=0, pady=10)
+        self.pass_entry.bind("<Return>", self.on_unlock)
+
+        self.unlock_btn = ctk.CTkButton(self, text="Unlock App", command=self.on_unlock)
+        self.unlock_btn.grid(row=3, column=0, pady=20)
+
+        self.pass_entry.focus_set()
+
+    def on_unlock(self, event=None):
+        password = self.pass_entry.get()
+        if self.unlock_callback(password):
+            self.destroy()
+        else:
+            self.pass_entry.delete(0, "end")
+            messagebox.showerror("Error", "Invalid Password")
+
+class PeerSecurityDialog(ctk.CTkToplevel):
+    def __init__(self, parent, db, peer_ip, peer_name, on_update_cb=None):
+        super().__init__(parent)
+        self.title(f"Security: {peer_name}")
+        self.geometry("450x600")
+        self.db = db
+        self.peer_ip = peer_ip
+        self.peer_name = peer_name
+        self.on_update_cb = on_update_cb
+        self.logger = audit.get_logger()
+
+        self.transient(parent)
+        self.grab_set()
+
+        # Load current perms
+        self.peer_info = self.db.get_trusted_peer(peer_ip)
+        self.perms = self.db.get_peer_permissions(peer_ip)
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(self, text=f"Manage Peer: {peer_name}", font=("Arial", 16, "bold")).grid(row=0, column=0, pady=20)
+        ctk.CTkLabel(self, text=f"IP: {peer_ip}", font=("Arial", 12)).grid(row=1, column=0, pady=(0, 20))
+
+        # --- Safety Number Section ---
+        sn_frame = ctk.CTkFrame(self)
+        sn_frame.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
+        ctk.CTkLabel(sn_frame, text="Safety Number (Verification Code)", font=("Arial", 12, "bold")).pack(pady=(10, 5))
+
+        my_fp = ssl_utils.get_local_fingerprint()
+        peer_fp = self.peer_info[2] if self.peer_info else None
+        safety_number = ssl_utils.get_safety_number(my_fp, peer_fp)
+
+        sn_display = ctk.CTkLabel(sn_frame, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
+        sn_display.pack(pady=5)
+        ctk.CTkLabel(sn_frame, text="Verify this code with the peer out-of-band.", font=("Arial", 10, "italic")).pack(pady=(0, 10))
+
+        # Verified Toggle
+        self.verified_var = ctk.BooleanVar(value=bool(self.perms.get('is_verified', False)))
+        self.verify_chk = ctk.CTkSwitch(self, text="VERIFIED IDENTITY", variable=self.verified_var, progress_color="green")
+        self.verify_chk.grid(row=3, column=0, pady=10, padx=40, sticky="w")
+
+        # Blocked
+        self.blocked_var = ctk.BooleanVar(value=bool(self.perms.get('is_blocked', False)))
+        self.block_chk = ctk.CTkSwitch(self, text="BLOCK PEER", variable=self.blocked_var, progress_color="red")
+        self.block_chk.grid(row=4, column=0, pady=10, padx=40, sticky="w")
+
+        ctk.CTkLabel(self, text="Granular Permissions:", font=("Arial", 12, "bold")).grid(row=5, column=0, pady=(20, 10), padx=40, sticky="w")
+
+        # Chat
+        self.chat_var = ctk.BooleanVar(value=bool(self.perms.get('can_chat', True)))
+        self.chat_chk = ctk.CTkSwitch(self, text="Can Chat", variable=self.chat_var)
+        self.chat_chk.grid(row=6, column=0, pady=5, padx=60, sticky="w")
+
+        # List Files
+        self.list_var = ctk.BooleanVar(value=bool(self.perms.get('can_list_files', True)))
+        self.list_chk = ctk.CTkSwitch(self, text="Can Browse Files", variable=self.list_var)
+        self.list_chk.grid(row=7, column=0, pady=5, padx=60, sticky="w")
+
+        # Download Files
+        self.down_var = ctk.BooleanVar(value=bool(self.perms.get('can_download_files', True)))
+        self.down_chk = ctk.CTkSwitch(self, text="Can Download Files", variable=self.down_var)
+        self.down_chk.grid(row=8, column=0, pady=5, padx=60, sticky="w")
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=9, column=0, pady=30)
+
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.destroy).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Save", width=100, command=self.save).pack(side="left", padx=10)
+
+    def save(self):
+        new_perms = {
+            'is_blocked': 1 if self.blocked_var.get() else 0,
+            'can_chat': 1 if self.chat_var.get() else 0,
+            'can_list_files': 1 if self.list_var.get() else 0,
+            'can_download_files': 1 if self.down_var.get() else 0,
+            'is_verified': 1 if self.verified_var.get() else 0
+        }
+        self.db.update_peer_permissions(self.peer_ip, new_perms)
+
+        if self.logger:
+            self.logger.log("SECURITY_POLICY_CHANGE", f"Updated permissions for {self.peer_name} ({self.peer_ip}): {new_perms}")
+
+        if self.on_update_cb:
+            self.on_update_cb()
+        elif hasattr(self.master, 'refresh_peers'):
+            self.master.refresh_peers()
+        self.destroy()
+
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
+
+class PasswordDialog(ctk.CTkToplevel):
+    def __init__(self, parent, title="Authentication Required"):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("400x200")
+        self.result = None
+
+        self.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self, text="Enter Master Password:", font=("Arial", 14)).grid(row=0, column=0, pady=20)
+
+        self.entry = ctk.CTkEntry(self, show="*", width=300)
+        self.entry.grid(row=1, column=0, padx=20, pady=10)
+        self.entry.bind("<Return>", self.on_ok)
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=2, column=0, pady=20)
+
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.on_cancel).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="OK", width=100, command=self.on_ok).pack(side="left", padx=10)
+
+        self.transient(parent)
+        self.grab_set()
+        self.entry.focus_set()
+        self.master.wait_window(self)
+
+    def on_ok(self, event=None):
+        self.result = self.entry.get()
+        self.destroy()
+
+    def on_cancel(self):
+        self.destroy()
+
+class LockScreen(ctk.CTkFrame):
+    def __init__(self, parent, password_callback):
+        super().__init__(parent, fg_color="#1a1a1a")
+        self.password_callback = password_callback
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 4), weight=1)
+
+        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
+
+        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
+        self.entry.grid(row=2, column=0, pady=10)
+        self.entry.bind("<Return>", self.on_unlock)
+
+        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
+        self.unlock_btn.grid(row=3, column=0, pady=20)
+
+        self.entry.focus_set()
+
+        self.configure(fg_color="#1a1a1a")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 4), weight=1)
+
+        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
+
+        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
+        self.entry.grid(row=2, column=0, pady=10)
+        self.entry.bind("<Return>", self.on_unlock)
+
+        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
+        self.unlock_btn.grid(row=3, column=0, pady=20)
+
+        self.entry.focus_set()
+        self.grab_set()
+
+    def on_unlock(self, event=None):
+        pw = self.entry.get()
+        if self.password_callback(pw):
+            self.destroy()
+        else:
+            self.entry.delete(0, "end")
+            self.entry.configure(placeholder_text="Invalid Password!", placeholder_text_color="red")
+
+class LockScreen(ctk.CTkFrame):
+    def __init__(self, parent, db, on_unlock):
+        super().__init__(parent, fg_color=parent._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"]))
+        self.db = db
+        self.on_unlock = on_unlock
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.grab_set()
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 1, 2, 3), weight=1)
+
+        inner_frame = ctk.CTkFrame(self)
+        inner_frame.grid(row=1, column=0, padx=20, pady=20)
+
+        self.title_label = ctk.CTkLabel(inner_frame, text="Application Locked", font=("Arial", 24, "bold"))
+        self.title_label.pack(pady=20, padx=40)
+
+        self.info_label = ctk.CTkLabel(inner_frame, text="Please enter your Master Password")
+        self.info_label.pack(pady=10)
+
+        self.password_entry = ctk.CTkEntry(inner_frame, show="*", width=250, placeholder_text="Master Password")
+        self.password_entry.pack(pady=10, padx=40)
+        self.password_entry.bind("<Return>", lambda e: self.attempt_unlock())
+
+        self.btn = ctk.CTkButton(inner_frame, text="Unlock", command=self.attempt_unlock)
+        self.btn.pack(pady=20)
+
+        if self.db.needs_setup():
+            self.title_label.configure(text="Initial Security Setup")
+            self.info_label.configure(text="Create a Master Password to protect your database")
+            self.btn.configure(text="Setup & Unlock")
+
+        self.password_entry.focus_set()
+
+    def attempt_unlock(self):
+        password = self.password_entry.get()
+        if not password:
+            return
+
+        if self.db.needs_setup():
+            self.db.setup(password)
+            audit.get_logger().log("MASTER_PASSWORD_SETUP", "Initial master password configured.")
+            self.on_unlock()
+            self.destroy()
+        else:
+            if self.db.unlock(password):
+                audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked.")
+                self.on_unlock()
+                self.destroy()
+            else:
+                audit.get_logger().log("INVALID_PASSWORD_ATTEMPT", "Failed unlock attempt.")
+                self.info_label.configure(text="Invalid Password! Try again.", text_color="red")
+                self.password_entry.delete(0, "end")
 
 class LANMessengerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self.withdraw() # Hide main window until unlocked
         self.title("LAN Messenger")
         self.geometry("1100x700")
 
-        self._search_after_id = None
+        self._chat_history_after_id = None
+        self._lock_timer_id = None
+        self._inactivity_timeout = 300000 # 5 minutes in ms
 
         # Load Settings
         self.settings = load_settings()
+        self._master_password = None
+        self._last_activity = time.time()
+        self._lock_timeout = 300
+        self._locked = False
+
+        # Prompt for password
+        while True:
+            password = self._prompt_password()
+            if not password:
+                self.destroy()
+                return
+
+            try:
+                self.db = Database(password)
+                self._master_password = password
+                break
+            except ValueError as e:
+                messagebox.showerror("Error", f"Authentication failed: {e}")
+
+        self.deiconify() # Show app
+        self._chat_history_after_id = None
 
         # State
         self.username = self.settings.get("username", "")
@@ -35,7 +339,6 @@ class LANMessengerApp(ctk.CTk):
         if not self.username or self.username.startswith("User_"):
             self.prompt_username()
 
-        self.db = Database()
         audit.init_logger(self.db)
         self.logger = audit.get_logger()
         self.logger.log("APP_START", f"Application started for user {self.username}")
@@ -44,7 +347,6 @@ class LANMessengerApp(ctk.CTk):
         self.executor = ThreadPoolExecutor(max_workers=5)
 
         # Init Networking with Configured Ports
-        # Initialize managers with security configuration from settings
         self.file_manager = FileTransferManager(
             self.db,
             port=self.settings["tcp_file_port"],
@@ -74,7 +376,6 @@ class LANMessengerApp(ctk.CTk):
         self.private_entries = {} # ip -> CTkEntry
         self._private_chat_after_ids = {} # ip -> after_id
         self._last_peers_snapshot = ""
-        self._search_timer = None
         self._last_search_query = ""
         self.current_private_peer = None
         self.current_file_view_source = "Local" # "Local" or IP
@@ -87,37 +388,94 @@ class LANMessengerApp(ctk.CTk):
         self.create_sidebar()
         self.create_main_area()
 
+        # App Locking
+        self.lock_screen = None
+        self.check_lock()
+
+        # Inactivity tracking
+        self.bind("<Any-KeyPress>", self._reset_lock_timer)
+        self.bind("<Any-Button>", self._reset_lock_timer)
+        self._reset_lock_timer()
+
         # Periodic Updates
         self.after(2000, self.refresh_peers)
-        self.after(10000, self.reap_messages)
         self.load_chat_history()
         self.after(100, lambda: self.msg_entry.focus_set())
+        self.bind("<Control-f>", self.focus_search)
+        self.bind("<Control-F>", self.focus_search)
+        self.bind_all("<Any-KeyPress>", self.reset_inactivity)
+        self.bind_all("<Any-ButtonPress>", self.reset_inactivity)
+
+        # Activity Tracking
+        self.bind_all("<KeyPress>", self._update_activity)
+        self.bind_all("<Button>", self._update_activity)
 
         # Start Message Reaper
         self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
         self.reaper_thread.start()
 
+        # Start inactivity checker
+        self.after(10000, self._check_inactivity)
+
+    def _update_activity(self, event=None):
+        self._last_activity = time.time()
+
+    def _check_inactivity(self):
+        if time.time() - self._last_activity > self._lock_timeout:
+            self.lock_app()
+        self.after(10000, self._check_inactivity)
+
+    def lock_app(self):
+        if not self._locked:
+            self._locked = True
+            LockScreen(self, self._verify_unlock)
+
+    def _verify_unlock(self, password):
+        if password == self._master_password:
+            self._locked = False
+            self._update_activity()
+            return True
+        return False
+
+    def _prompt_password(self):
+        pw_dialog = PasswordDialog(self)
+        return pw_dialog.result
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+
+    def _refresh_after_reap(self):
+        """Thread-safe UI refresh after background reaping."""
+        if not self.winfo_exists():
+            return
+        # Only refresh visible chat tabs to save resources
+        current_tab = self.tabview.get()
+        if current_tab == "Global Chat":
+            self.load_chat_history(debounce=True)
+        elif current_tab.startswith("Chat: "):
+            if self.current_private_peer:
+                self.load_private_chat(self.current_private_peer)
+
     def message_reaper_loop(self):
+        """Background thread for periodic database maintenance (runs every 15s)."""
         while True:
             try:
-                # Reap messages
+                # Reap messages and files in background
                 msg_count = self.db.reap_expired_messages()
-                if msg_count > 0:
-                    self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
-                    self.after(0, self.load_chat_history)
-                    # Also reload private chat if open
-                    if self.current_private_peer:
-                        self.after(0, lambda p=self.current_private_peer: self.load_private_chat(p))
-
-                # Reap files
                 file_count = self.db.delete_expired_files()
-                if file_count > 0:
-                    self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
-                    if self.current_file_view_source == "Local":
-                        self.after(0, self.refresh_files_view)
+
+                if msg_count > 0 or file_count > 0:
+                    if msg_count > 0:
+                        self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
+                    if file_count > 0:
+                        self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
+
+                    # Schedule UI refresh on main thread
+                    self.after(0, self._refresh_after_reap)
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
-            time.sleep(60)
+            time.sleep(15)
 
     def prompt_username(self):
         dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
@@ -140,20 +498,13 @@ class LANMessengerApp(ctk.CTk):
     def _handle_event(self, event_type, *args):
         if event_type == 'NEW_PEER':
             ip, name = args[0], args[1]
-
-            # Check if this is a NEW peer (not just a name update)
             is_new_peer = ip not in self.peers
-
-            # Update peer (handles both new peer and name change)
             self.peers[ip] = name
-
-            # Only send HELLO back if this was a new peer
             if is_new_peer:
                 self.executor.submit(self.network.send_hello, ip, self.username)
         elif event_type == 'MSG':
-             self.load_chat_history()
+             self.load_chat_history(debounce=True)
         elif event_type == 'MSG_PRIV':
-             # args: (msg_id, sender, content, peer_ip)
              peer_ip = args[3]
              if peer_ip in self.private_chats:
                  self.load_private_chat(peer_ip)
@@ -161,7 +512,7 @@ class LANMessengerApp(ctk.CTk):
                  sender_name = self.peers.get(peer_ip, args[1])
                  self.open_private_chat(peer_ip, sender_name)
         elif event_type in ['EDIT', 'DELETE']:
-             self.load_chat_history()
+             self.load_chat_history(debounce=True)
         elif event_type == 'SECURITY_ALERT':
              msg = args[0]
              messagebox.showwarning("Security Alert", msg)
@@ -191,13 +542,23 @@ class LANMessengerApp(ctk.CTk):
         self.peers_scroll = ctk.CTkScrollableFrame(self.sidebar_frame, width=180, label_text="Peers")
         self.peers_scroll.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
 
+        self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", fg_color="#e74c3c", hover_color="#c0392b", command=self.lock_app)
+        self.lock_btn.grid(row=4, column=0, padx=20, pady=5)
+
         self.settings_btn = ctk.CTkButton(self.sidebar_frame, text="Settings", command=self.open_settings)
-        self.settings_btn.grid(row=4, column=0, padx=20, pady=(20, 10))
+        self.settings_btn.grid(row=5, column=0, padx=20, pady=5)
+
+        self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", command=self.lock_app, fg_color="#555555")
+        self.lock_btn.grid(row=5, column=0, padx=20, pady=(0, 10))
 
         self.add_peer_btn = ctk.CTkButton(self.sidebar_frame, text="Info / Connect IP", command=self.add_manual_peer)
-        self.add_peer_btn.grid(row=5, column=0, padx=20, pady=(0, 20))
+        self.add_peer_btn.grid(row=6, column=0, padx=20, pady=(0, 20))
 
         self.sidebar_frame.grid_rowconfigure(3, weight=1)
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
 
     def create_main_area(self):
         self.tabview = ctk.CTkTabview(self, command=self.on_tab_change)
@@ -213,7 +574,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.chat_display.tag_config("search_info", foreground="#3B8ED0", font=ctk.CTkFont(slant="italic"))
+        self.chat_display.tag_config("search_info", foreground="#3B8ED0")
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -330,10 +691,21 @@ class LANMessengerApp(ctk.CTk):
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
         self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
 
-        self.refresh_audit_btn = ctk.CTkButton(self.audit_controls, text="Refresh Logs", command=self.load_audit_logs)
+        self.refresh_audit_btn = ctk.CTkButton(self.audit_controls, text="Refresh Logs", command=self.refresh_audit_view)
         self.refresh_audit_btn.pack(pady=5)
 
+    def refresh_audit_view(self):
+        """Refreshes audit logs with non-blocking success feedback."""
+        self.load_audit_logs()
+        self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        def reset():
+            if self.refresh_audit_btn.winfo_exists():
+                self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(2000, reset)
+
     def load_audit_logs(self):
+        if not self.winfo_exists() or self.tabview.get() != "Audit Logs":
+            return
         logs = self.db.get_audit_logs(200)
         self.audit_display.configure(state="normal")
         self.audit_display.delete("1.0", "end")
@@ -390,22 +762,6 @@ class LANMessengerApp(ctk.CTk):
             self.change_name_btn.configure(text="Saved", fg_color="#2ecc71")
             self.after(2000, lambda: self.change_name_btn.configure(text="Set", fg_color=("#3B8ED0", "#1F6AA5")))
 
-    def reap_messages(self):
-        """Periodically remove expired messages from the database and refresh UI."""
-        deleted_count = self.db.delete_expired_messages()
-        if deleted_count == 0:
-            self.after(10000, self.reap_messages)
-            return
-
-        # Only refresh if we are on a chat tab
-        current_tab = self.tabview.get()
-        if current_tab == "Global Chat":
-            self.load_chat_history()
-        elif current_tab.startswith("Chat: "):
-            if self.current_private_peer:
-                self.load_private_chat(self.current_private_peer)
-
-        self.after(10000, self.reap_messages) # Run every 10s
 
     def show_trust_warning(self, ip):
         if messagebox.askyesno("Security Warning", f"Fingerprint mismatch detected for {ip}!\nThis could be a Man-in-the-Middle attack or the user reinstalled the app.\n\nDo you want to trust this new identity?"):
@@ -413,14 +769,20 @@ class LANMessengerApp(ctk.CTk):
             self.peer_trust[ip] = 'trusted'
             self.refresh_peers()
 
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, self.db, ip, name, self.refresh_peers)
+
     def refresh_peers(self):
         # Update peer trust levels from DB in batch
         trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
         for ip in self.peers:
             self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
 
+        # Also include blocked status in snapshot for UI refreshes
+        all_perms = self.db.get_peers_permissions(list(self.peers.keys()))
+
         # Prevent unnecessary UI rebuilds using snapshot comparison
-        current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust}, sort_keys=True)
+        current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust, "perms": all_perms}, sort_keys=True)
         if current_snapshot == self._last_peers_snapshot:
             self.after(2000, self.refresh_peers)
             return
@@ -435,17 +797,39 @@ class LANMessengerApp(ctk.CTk):
             lbl.pack(pady=20)
 
         for ip, name in self.peers.items():
-            row = ctk.CTkFrame(self.peers_scroll)
+            perms = all_perms.get(ip, {})
+            is_blocked = perms.get('is_blocked', False)
+            is_verified = perms.get('is_verified', False)
+
+            row = ctk.CTkFrame(self.peers_scroll, fg_color="#333333" if is_blocked else None)
             row.pack(fill="x", pady=2)
-            lbl = ctk.CTkLabel(row, text=f"{name}\n{ip}", font=("Arial", 10))
+
+            label_color = "gray" if is_blocked else None
+            label_text = f"{name}\n{ip}"
+            if is_blocked:
+                label_text += " (BLOCKED)"
+
+            lbl = ctk.CTkLabel(row, text=label_text, font=("Arial", 10), text_color=label_color)
             lbl.pack(side="left", padx=5)
 
+            # Verification badge
+            if is_verified:
+                v_lbl = ctk.CTkLabel(row, text="✓", text_color="#2ecc71", font=("Arial", 12, "bold"), width=15)
+                v_lbl.pack(side="left", padx=2)
+
+            # Security button
+            btn_sec = ctk.CTkButton(row, text="Sec", width=35, height=20, fg_color="#555555",
+                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+            btn_sec.pack(side="right", padx=2)
+
             btn_browse = ctk.CTkButton(row, text="Browse", width=60, height=20,
-                              command=lambda i=ip, n=name: self.browse_peer_files(i, n))
+                              command=lambda i=ip, n=name: self.browse_peer_files(i, n),
+                              state="disabled" if is_blocked else "normal")
             btn_browse.pack(side="right", padx=5)
 
             btn_chat = ctk.CTkButton(row, text="Chat", width=60, height=20,
-                              command=lambda i=ip, n=name: self.open_private_chat(i, n))
+                              command=lambda i=ip, n=name: self.open_private_chat(i, n),
+                              state="disabled" if is_blocked else "normal")
             btn_chat.pack(side="right", padx=2)
 
             # Trust indicator
@@ -465,6 +849,7 @@ class LANMessengerApp(ctk.CTk):
         dialog.title("Connect to IP")
         dialog.geometry("300x280")
         dialog.transient(self)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
 
         ip_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         ip_frame.pack(pady=10)
@@ -496,6 +881,7 @@ class LANMessengerApp(ctk.CTk):
                 threading.Thread(target=self.try_manual_connect, args=(ip, dialog, connect_btn), daemon=True).start()
 
         entry.bind("<Return>", connect)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
         connect_btn = ctk.CTkButton(dialog, text="Connect", command=connect)
         connect_btn.pack(pady=20)
         self.after(200, lambda: entry.focus_set() if entry.winfo_exists() else None)
@@ -516,6 +902,7 @@ class LANMessengerApp(ctk.CTk):
         tab = self.tabview.get()
         if tab == "Global Chat":
             self.msg_entry.focus_set()
+            self.load_chat_history(debounce=False)
         elif tab == "Audit Logs":
             self.load_audit_logs()
         elif tab.startswith("Chat: "):
@@ -524,31 +911,52 @@ class LANMessengerApp(ctk.CTk):
                 self.current_private_peer = peer_ip
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
+                self.load_private_chat(peer_ip, debounce=False)
 
     def on_search_key(self, event):
         # Throttle live search
-        if self._search_after_id:
-            self.after_cancel(self._search_after_id)
-        self._search_after_id = self.after(300, self.load_chat_history)
+        if self._chat_history_after_id:
+            self.after_cancel(self._chat_history_after_id)
+        self._chat_history_after_id = self.after(300, self.load_chat_history)
 
     def clear_search(self):
-        if self._search_after_id:
-            self.after_cancel(self._search_after_id)
-            self._search_after_id = None
-        self.search_entry.delete(0, "end")
-        self.load_chat_history()
-        self.search_entry.focus_set()
-
-    def load_chat_history(self):
-        if self._search_timer:
+        if self._chat_history_after_id:
             try:
-                self.after_cancel(self._search_timer)
+                self.after_cancel(self._chat_history_after_id)
             except Exception:
                 pass
-            self._search_timer = None
-        self._last_search_query = self.search_entry.get().strip().lower()
+            self._chat_history_after_id = None
+        self.search_entry.delete(0, "end")
+        self.load_chat_history(debounce=False)
+        self.search_entry.focus_set()
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+
+    def load_chat_history(self, debounce=True):
+        """Debounced global chat refresh with lazy loading."""
+        if not self.winfo_exists():
+            return
+
+        if debounce:
+            if self._chat_history_after_id:
+                try:
+                    self.after_cancel(self._chat_history_after_id)
+                except Exception:
+                    pass
+            self._chat_history_after_id = self.after(100, lambda: self.load_chat_history(debounce=False))
+            return
+
+        self._chat_history_after_id = None
+
+        # Lazy loading: only update if Global Chat is visible
+        if self.tabview.get() != "Global Chat":
+            return
 
         query = self.search_entry.get().strip().lower()
+        self._last_search_query = query
+
         messages = self.db.get_messages(200)
         self.chat_display.configure(state="normal")
         self.chat_display.delete("1.0", "end")
@@ -575,15 +983,13 @@ class LANMessengerApp(ctk.CTk):
             self.chat_display.insert("end", "\n".join(lines) + "\n")
         elif query:
             self.chat_display.insert("end", f"\n\nNo messages found matching '{query}'", "center")
-            self.chat_display.tag_config("center", justify='center')
         elif not messages:
             self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
-            self.chat_display._textbox.tag_config("center", justify='center')
 
         self.chat_display.configure(state="disabled")
         self.chat_display.see("end")
 
-    def get_ttl_seconds(self, var=None):
+    def _get_ttl_seconds(self, var=None):
         val = var.get() if var else self.ttl_var.get()
         if val == "1m": return 60
         if val == "10m": return 600
@@ -594,28 +1000,32 @@ class LANMessengerApp(ctk.CTk):
     def send_message(self, event=None):
         msg = self.msg_entry.get()
         if not msg: return
-        ttl = self.get_ttl_seconds()
-
-        expires_at = (time.time() + ttl) if ttl else None
+        ttl = self._get_ttl_seconds()
 
         # If we are in a private chat tab, send private message
         current_tab = self.tabview.get()
         if current_tab.startswith("Chat: "):
             peer_ip = self.current_private_peer
             if peer_ip:
-                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, expires_at=expires_at)
+                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, ttl=ttl)
                 threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True, ttl)).start()
                 self.msg_entry.delete(0, "end")
                 self.load_private_chat(peer_ip)
                 return
 
         # Otherwise send global message
-        msg_id = self.db.add_message(self.username, msg, expires_at=expires_at)
+        msg_id = self.db.add_message(self.username, msg, ttl=ttl)
         for ip in self.peers:
             self.executor.submit(self.network.send_message, ip, self.username, msg, msg_id, False, ttl)
 
         self.msg_entry.delete(0, "end")
         self.load_chat_history()
+
+    def open_security_dialog(self, ip, name):
+        def on_update():
+            self._last_peers_snapshot = ""
+            self.refresh_peers()
+        PeerSecurityDialog(self, self.db, ip, name, on_update)
 
     def open_private_chat(self, ip, name):
         # Find if we already have a tab for this IP
@@ -658,11 +1068,9 @@ class LANMessengerApp(ctk.CTk):
                 if not m: return
 
                 # Get TTL
-                ttl_sec = self.get_ttl_seconds(var=tvar)
+                ttl_sec = self._get_ttl_seconds(var=tvar)
 
-                exp_at = (time.time() + ttl_sec) if ttl_sec else None
-
-                mid = self.db.add_message(self.username, m, recipient=i, expires_at=exp_at)
+                mid = self.db.add_message(self.username, m, recipient=i, ttl=ttl_sec)
                 threading.Thread(target=self.network.send_message, args=(i, self.username, m, mid, True, ttl_sec)).start()
                 ent.delete(0, "end")
                 self.load_private_chat(i)
@@ -680,10 +1088,14 @@ class LANMessengerApp(ctk.CTk):
         self.load_private_chat(ip)
 
     def load_private_chat(self, peer_ip, debounce=True):
-        """Debounced private chat refresh with batched insertions."""
+        """Debounced private chat refresh with batched insertions and lazy loading."""
         if not self.winfo_exists():
             return
-        if peer_ip not in self.private_chats: return
+
+        # Lazy loading: only update if this peer's tab is currently visible
+        current_tab = self.tabview.get()
+        if self.private_chat_tabs.get(current_tab) != peer_ip:
+            return
 
         if debounce:
             if peer_ip in self._private_chat_after_ids:
@@ -721,7 +1133,7 @@ class LANMessengerApp(ctk.CTk):
             text = self.chat_display.selection_get()
             self.clipboard_clear()
             self.clipboard_append(text)
-        except:
+        except Exception:
             pass
 
     def edit_last_message(self):
@@ -760,11 +1172,18 @@ class LANMessengerApp(ctk.CTk):
             size = os.path.getsize(path)
             checksum = FileTransferManager.calculate_sha256(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self._get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(filename, path, size, local_ip, is_folder=False, checksum=checksum, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
+
+            # Visual feedback
+            self.share_btn.configure(text="Shared!", fg_color="#2ecc71")
+            def reset_share_btn():
+                if self.share_btn.winfo_exists():
+                    self.share_btn.configure(text="Share File", fg_color=("#3B8ED0", "#1F6AA5"))
+            self.after(2000, reset_share_btn)
 
     def get_folder_size(self, path):
         total_size = 0
@@ -781,11 +1200,18 @@ class LANMessengerApp(ctk.CTk):
             dirname = os.path.basename(path)
             size = self.get_folder_size(path)
             local_ip = socket.gethostbyname(socket.gethostname())
-            ttl = self._get_ttl_seconds(var_name="file")
+            ttl = self._get_ttl_seconds(var=self.file_ttl_var)
             self.db.add_file(dirname, path, size, local_ip, is_folder=True, ttl=ttl)
             self.current_file_view_source = "Local"
             self.source_label.configure(text="Viewing: Local Shared Files")
             self.refresh_files_view()
+
+            # Visual feedback
+            self.share_folder_btn.configure(text="Shared!", fg_color="#2ecc71")
+            def reset_share_folder_btn():
+                if self.share_folder_btn.winfo_exists():
+                    self.share_folder_btn.configure(text="Share Folder", fg_color=("#3B8ED0", "#1F6AA5"))
+            self.after(2000, reset_share_folder_btn)
 
     def show_my_files(self):
         self.current_file_view_source = "Local"
@@ -821,15 +1247,18 @@ class LANMessengerApp(ctk.CTk):
             files = self.db.get_files()
             file_data = []
             for f in files:
-                # f: (id, filename, path, size, owner_ip, is_folder, checksum)
-                file_data.append({
-                    'filename': f[1],
-                    'path': f[2],
-                    'size': f[3],
-                    'is_folder': f[5],
-                    'owner': "Me",
-                    'checksum': f[6] if len(f) > 6 else None
-                })
+                # f can be dict (from peer) or tuple (from local db)
+                if isinstance(f, tuple):
+                     file_data.append({
+                        'filename': f[1],
+                        'path': f[2],
+                        'size': f[3],
+                        'is_folder': f[5],
+                        'owner': "Me",
+                        'checksum': f[6] if len(f) > 6 else None
+                    })
+                else:
+                     file_data.append(f)
             self.render_file_list(file_data)
         else:
             self.download_btn.configure(state="normal")
@@ -855,10 +1284,8 @@ class LANMessengerApp(ctk.CTk):
 
         now = time.time()
         for f in files:
-            # f can be dict (from peer) or tuple (from local db)
             # Normalize to dict
             if isinstance(f, tuple):
-                # f: (id, filename, path, size, owner_ip, is_folder, checksum, expires_at)
                 f = {
                     'id': f[0],
                     'filename': f[1],
@@ -910,13 +1337,9 @@ class LANMessengerApp(ctk.CTk):
             self.after(0, lambda: self.file_progress.set(0))
 
             for var, f in items:
-                # We reuse the folder download even for single files if needed,
-                # or call download_file. But download_folder is more robust now for progress.
                 if f.get('is_folder'):
                     self.file_manager.download_folder(target_ip, f['path'], progress_callback=self._download_progress)
                 else:
-                    # For a single file, we wrap it in a mock folder download report logic if we want to share the same UI
-                    # Or just call download_file. Let's make it consistent.
                     self.file_manager.download_file(target_ip, f['path'], expected_checksum=f.get('checksum'))
                     self.after(0, lambda p=f['filename']: self.progress_file_lbl.configure(text=f"Downloaded {p}"))
 
@@ -930,7 +1353,6 @@ class LANMessengerApp(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _download_progress(self, rel_path, status, file_ratio, overall_ratio):
-        """Thread‑safe callback from FileTransferManager to update UI progress bars."""
         def update():
             if status == "START":
                 self.progress_file_lbl.configure(text=f"Downloading: {rel_path}")
@@ -951,6 +1373,42 @@ class LANMessengerApp(ctk.CTk):
             self.file_manager.download_folder(ip, path)
         else:
             self.file_manager.download_file(ip, path)
+
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, self.db, ip, name, self.logger)
+
+    def check_lock(self):
+        if self.db.is_locked():
+            if not self.lock_screen:
+                self.lock_screen = LockScreen(self, self.db, self.after_unlock)
+        else:
+            if self.lock_screen:
+                self.lock_screen.destroy()
+                self.lock_screen = None
+
+    def after_unlock(self):
+        self.lock_screen = None
+        self.load_chat_history()
+        self.refresh_peers()
+        self._reset_lock_timer()
+
+    def lock_app(self):
+        if not self.db.is_locked():
+            self.db.lock_db()
+            self.logger.log("APP_LOCKED", "Application manually locked.")
+            self.check_lock()
+
+    def _reset_lock_timer(self, event=None):
+        if self._lock_timer_id:
+            self.after_cancel(self._lock_timer_id)
+        if not self.db.is_locked():
+            self._lock_timer_id = self.after(self._inactivity_timeout, self._on_inactivity)
+
+    def _on_inactivity(self):
+        if not self.db.is_locked():
+            self.db.lock_db()
+            self.logger.log("APP_LOCKED", "Application locked due to inactivity.")
+            self.check_lock()
 
     def open_settings(self):
         dialog = ctk.CTkToplevel(self)
@@ -988,9 +1446,12 @@ class LANMessengerApp(ctk.CTk):
     def on_closing(self):
         if hasattr(self, 'discovery'):
             self.discovery.stop()
-        self.network.close()
-        self.file_manager.close()
-        self.db.close()
+        if hasattr(self, 'network'):
+            self.network.close()
+        if hasattr(self, 'file_manager'):
+            self.file_manager.close()
+        if hasattr(self, 'db'):
+            self.db.close()
         self.executor.shutdown(wait=False)
         self.destroy()
 
