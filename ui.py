@@ -683,10 +683,10 @@ class LANMessengerApp(ctk.CTk):
 
         self.audit_display = ctk.CTkTextbox(self.audit_tab, state="disabled")
         self.audit_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.audit_display._textbox.tag_config("alert", foreground="#e74c3c", font=ctk.CTkFont(weight="bold"))
-        self.audit_display._textbox.tag_config("warning", foreground="#e67e22", font=ctk.CTkFont(weight="bold"))
-        self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
-        self.audit_display._textbox.tag_config("center", justify='center')
+        self.audit_display.tag_config("alert", foreground="#e74c3c")
+        self.audit_display.tag_config("warning", foreground="#e67e22")
+        self.audit_display.tag_config("info", foreground="#2ecc71")
+        self.audit_display.tag_config("center", justify='center')
 
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
         self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -713,20 +713,35 @@ class LANMessengerApp(ctk.CTk):
         if not logs:
             self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
         else:
-            lines = []
+            # Event type mapping to semantic tags
+            tag_map = {
+                "SECURITY_ALERT": "alert",
+                "FILE_INTEGRITY_FAILURE": "alert",
+                "AUTH_FAILURE": "warning",
+                "FILE_TRANSFER": "info",
+                "FILE_INTEGRITY_SUCCESS": "info",
+                "CONNECTION": "info",
+                "APP_START": "info",
+                "DATA_RETENTION": "info",
+                "SETTINGS_CHANGE": "info",
+                "TOFU_TRUST": "info",
+                "SECURITY_INFO": "info"
+            }
+
             for log in logs:
                 # log: (id, event_type, details, timestamp)
                 event_type = log[1]
                 ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-                lines.append(f"[{ts}] {event_type}: {log[2]}")
-
-            if lines:
-                self.audit_display.insert("end", "\n".join(lines) + "\n")
-            else:
-                self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+                tag = tag_map.get(event_type, "")
+                self.audit_display.insert("end", f"[{ts}] {event_type}: {log[2]}\n", tag)
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("1.0")
+
+        # Provide success feedback
+        original_fg = self.refresh_audit_btn.cget("fg_color")
+        self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        self.after(1500, lambda: self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=original_fg) if self.refresh_audit_btn.winfo_exists() else None)
 
     def update_username(self, event=None):
         new_name = self.username_entry.get().strip()
