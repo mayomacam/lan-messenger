@@ -342,7 +342,7 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         self.chat_display.tag_config("search_info", foreground="#3B8ED0")
-        self.chat_display._textbox.tag_config("center", justify='center')
+        self.chat_display.tag_config("center", justify='center')
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
