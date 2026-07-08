@@ -34,6 +34,6 @@
 **Learning:** Repetitive decryption of identical ciphertexts (common in chat history) and fetching entire rows just to check a single field are major performance sinks. LRU caching for decryption and selective SQL column fetching can reduce execution time by 40-90%.
 **Action:** Use functools.lru_cache for expensive idempotent operations like decryption. Always fetch only the minimum required columns for validation checks to minimize data transfer and processing overhead.
 
-## 2025-05-24 - [Metadata-based Hashing Cache]
-**Learning:** SHA-256 calculation is a significant I/O and CPU bottleneck when generating file lists or verifying integrity for large files. Metadata validation (path, mtime, size) is a 99.9% reliable heuristic for file identity in this context.
-**Action:** Implement module-level LRU caching for file hashes using os.stat() metadata to eliminate redundant disk reads for unchanged files.
+## 2025-05-24 - [UI Refresh Cycles with Debouncing and Lazy Loading]
+**Learning:** Polling loops and unconditioned UI updates (e.g., refreshing all chat tabs when only one is visible) are major performance sinks in GUI apps. Implementing visibility checks (lazy loading) and debouncing (throttling) ensures that CPU-intensive rendering and database queries only occur when necessary.
+**Action:** Always check widget visibility or tab state before performing heavy UI updates. Use a standard debounce pattern (e.g., 100ms) for high-frequency events to prevent UI lag.
