@@ -110,6 +110,11 @@ class PeerSecurityDialog(ctk.CTkToplevel):
 
         sn_display = ctk.CTkLabel(sn_frame, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
         sn_display.pack(pady=5)
+
+        self.copy_sn_btn = ctk.CTkButton(sn_frame, text="Copy", width=60, height=20,
+                                        command=lambda: self.copy_safety_number(safety_number))
+        self.copy_sn_btn.pack(pady=5)
+
         ctk.CTkLabel(sn_frame, text="Verify this code with the peer out-of-band.", font=("Arial", 10, "italic")).pack(pady=(0, 10))
 
         # Verified Toggle
@@ -145,6 +150,16 @@ class PeerSecurityDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.destroy).pack(side="left", padx=10)
         ctk.CTkButton(btn_frame, text="Save", width=100, command=self.save).pack(side="left", padx=10)
+
+    def copy_safety_number(self, number):
+        self.clipboard_clear()
+        self.clipboard_append(number)
+        self.copy_sn_btn.configure(text="Copied!", fg_color="#2ecc71")
+
+        def reset():
+            if self.copy_sn_btn.winfo_exists():
+                self.copy_sn_btn.configure(text="Copy", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(2000, reset)
 
     def save(self):
         new_perms = {
