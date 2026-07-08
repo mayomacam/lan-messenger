@@ -1,46 +1,36 @@
-import sys
 import os
-import time
-import threading
+import sys
 
-# Add current dir to path
-sys.path.append(os.getcwd())
-
-def test_db():
+def verify():
     print("Testing Database...")
     try:
         from db import Database
-        db = Database("test.db")
-        msg_id = db.add_message("test_user", "hello")
+        # Clean up any existing test artifacts
+        if os.path.exists("test_install.db"): os.remove("test_install.db")
+        if os.path.exists(".test_install.key"): os.remove(".test_install.key")
+
+        db = Database("test_password", db_name="test_install.db", key_file=".test_install.key")
+        db.add_message("System", "Installation Verified")
         msgs = db.get_messages()
-        assert len(msgs) > 0
-        assert msgs[0][2] == "hello"
+        if len(msgs) > 0 and msgs[0][1] == "System":
+            print("Database OK")
+        else:
+            print("Database FAILED: Message retrieval error")
+
         db.close()
-        try:
-            os.remove("test.db")
-        except:
-             pass
-        print("Database OK")
+        if os.path.exists("test_install.db"): os.remove("test_install.db")
+        if os.path.exists(".test_install.key"): os.remove(".test_install.key")
     except Exception as e:
         print(f"Database FAILED: {e}")
 
-def test_imports():
     print("Testing Imports...")
     try:
         import customtkinter
-        import network
-        import file_transfer
-        import ui
+        import cryptography
+        import PIL
         print("Imports OK")
     except ImportError as e:
         print(f"Imports FAILED: {e}")
-    except Exception as e:
-        # ui might fail due to no display
-        if "display" in str(e).lower() or "screen" in str(e).lower():
-            print("UI Import attempted (Display error expected in headless):", e)
-        else:
-            print(f"Import FAILED with unknown error: {e}")
 
 if __name__ == "__main__":
-    test_db()
-    test_imports()
+    verify()

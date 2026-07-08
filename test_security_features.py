@@ -17,9 +17,12 @@ class MockLogger:
 
 def run_security_tests():
     db_name = "test_security.db"
+    key_file = ".test_security.key"
     if os.path.exists(db_name): os.remove(db_name)
+    if os.path.exists(key_file): os.remove(key_file)
 
-    db = Database(db_name)
+    # Use a dummy password for tests
+    db = Database("test_password", db_name=db_name, key_file=key_file)
     audit.init_logger(db)
 
     chat_port = 12400
@@ -30,7 +33,6 @@ def run_security_tests():
     file_mgr = FileTransferManager(db, file_port)
 
     peer_ip = "127.0.0.1"
-    # We are the peer to ourselves for this test
 
     print("\n--- Testing Blocked Peer ---")
     db.add_trusted_peer(peer_ip, "Self", "fake_fingerprint")
@@ -40,8 +42,7 @@ def run_security_tests():
     try:
         with socket.create_connection((peer_ip, chat_port), timeout=2) as raw:
             s = wrap_socket(raw)
-            # The server should close connection after detecting block or return error
-            s.sendall(b'\x00\x00\x00\x02{}') # Empty json
+            s.sendall(b'\x00\x00\x00\x02{}')
             resp = s.recv(1024)
             print(f"Chat response for blocked peer: {resp}")
             if b"Blocked" in resp or not resp:
@@ -75,10 +76,7 @@ def run_security_tests():
             length = len(packet)
             import struct
             s.sendall(struct.pack('>I', length) + packet)
-            # No response expected for MSG if unauthorized, it just returns
-            print("Chat MSG sent (should be ignored by server logic).")
             time.sleep(0.5)
-            # Check if message added to DB
             cursor = db.conn.cursor()
             cursor.execute("SELECT * FROM messages WHERE id='1'")
             if cursor.fetchone():
@@ -97,7 +95,7 @@ def run_security_tests():
             s.sendall(json.dumps({'cmd': 'LIST_SHARED'}).encode())
             resp = s.recv(1024)
             print(f"File List response: {resp}")
-            if b"Permission denied" in resp:
+            if b"Listing disabled" in resp: # Updated message from source
                 print("SUCCESS: File list denied.")
             else:
                 print("FAILURE: File list NOT denied.")
@@ -108,6 +106,7 @@ def run_security_tests():
     file_mgr.close()
     db.close()
     if os.path.exists(db_name): os.remove(db_name)
+    if os.path.exists(key_file): os.remove(key_file)
 
 if __name__ == "__main__":
     run_security_tests()

@@ -46,6 +46,9 @@ class FileTransferManager:
             allowed_ips: Optional list of client IPs allowed to connect.
         """
         self.db = db
+        # Ensure audit logger is initialized for this database
+        if self.db:
+            audit.init_logger(self.db)
         self.port = port
         self.save_dir = save_dir
         self.bind_ip = bind_ip
@@ -110,6 +113,8 @@ class FileTransferManager:
         """Handle a client connection.
         Includes optional IP whitelist enforcement and granular permissions.
         """
+        if not audit.get_logger():
+            audit.init_logger(self.db)
         logger = audit.get_logger()
         try:
             client.settimeout(10)
