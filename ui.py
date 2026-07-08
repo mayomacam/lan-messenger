@@ -472,7 +472,7 @@ class LANMessengerApp(ctk.CTk):
                         self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
 
                     # Schedule UI refresh on main thread
-                    self.after(0, self._refresh_after_reap)
+                    self.after(0, lambda: self._refresh_after_reap(msg_count))
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
             time.sleep(15)
@@ -916,6 +916,11 @@ class LANMessengerApp(ctk.CTk):
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
                 self.load_private_chat(peer_ip, debounce=False)
+
+    def focus_search(self, event=None):
+        """Switches to Global Chat and focuses the search entry (Ctrl+F)."""
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
 
     def on_search_key(self, event):
         # Throttle live search
