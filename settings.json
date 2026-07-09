@@ -1,8 +1,0 @@
-{
-    "username": "User",
-    "tcp_chat_port": 12347,
-    "tcp_file_port": 12346,
-    "bind_ip": "0.0.0.0",
-    "auth_token": "",
-    "allowed_ips": []
-}

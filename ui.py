@@ -38,6 +38,7 @@ class MasterPasswordDialog(ctk.CTkToplevel):
 
         self.after(100, lambda: self.password_entry.focus_set())
         self.grab_set()
+        self.bind("<Escape>", lambda e: self.on_cancel())
 
     def on_submit(self, event=None):
         password = self.password_entry.get()
@@ -89,6 +90,7 @@ class PeerSecurityDialog(ctk.CTkToplevel):
 
         self.transient(parent)
         self.grab_set()
+        self.bind("<Escape>", lambda e: self.destroy())
 
         # Load current perms
         self.peer_info = self.db.get_trusted_peer(peer_ip)
@@ -108,8 +110,16 @@ class PeerSecurityDialog(ctk.CTkToplevel):
         peer_fp = self.peer_info[2] if self.peer_info else None
         safety_number = ssl_utils.get_safety_number(my_fp, peer_fp)
 
-        sn_display = ctk.CTkLabel(sn_frame, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
-        sn_display.pack(pady=5)
+        sn_display_frame = ctk.CTkFrame(sn_frame, fg_color="transparent")
+        sn_display_frame.pack(pady=5)
+
+        self.safety_number = safety_number
+        sn_display = ctk.CTkLabel(sn_display_frame, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
+        sn_display.pack(side="left", padx=(10, 5))
+
+        self.copy_sn_btn = ctk.CTkButton(sn_display_frame, text="Copy", width=60, height=20, command=self.copy_safety_number)
+        self.copy_sn_btn.pack(side="left", padx=(5, 10))
+
         ctk.CTkLabel(sn_frame, text="Verify this code with the peer out-of-band.", font=("Arial", 10, "italic")).pack(pady=(0, 10))
 
         # Verified Toggle
@@ -145,6 +155,15 @@ class PeerSecurityDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.destroy).pack(side="left", padx=10)
         ctk.CTkButton(btn_frame, text="Save", width=100, command=self.save).pack(side="left", padx=10)
+
+    def copy_safety_number(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.safety_number)
+        self.copy_sn_btn.configure(text="Copied!", fg_color="#2ecc71")
+        def reset():
+            if self.copy_sn_btn.winfo_exists():
+                self.copy_sn_btn.configure(text="Copy", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(2000, reset)
 
     def save(self):
         new_perms = {
@@ -191,6 +210,7 @@ class PasswordDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
         self.entry.focus_set()
+        self.bind("<Escape>", lambda e: self.on_cancel())
         self.master.wait_window(self)
 
     def on_ok(self, event=None):
@@ -547,9 +567,6 @@ class LANMessengerApp(ctk.CTk):
 
         self.settings_btn = ctk.CTkButton(self.sidebar_frame, text="Settings", command=self.open_settings)
         self.settings_btn.grid(row=5, column=0, padx=20, pady=5)
-
-        self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", command=self.lock_app, fg_color="#555555")
-        self.lock_btn.grid(row=5, column=0, padx=20, pady=(0, 10))
 
         self.add_peer_btn = ctk.CTkButton(self.sidebar_frame, text="Info / Connect IP", command=self.add_manual_peer)
         self.add_peer_btn.grid(row=6, column=0, padx=20, pady=(0, 20))
