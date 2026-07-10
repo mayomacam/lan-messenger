@@ -9,9 +9,7 @@ import shutil
 import json
 import audit
 import ssl_utils
-import pyotp
-import qrcode
-from PIL import Image, ImageTk
+import security_engine
 from concurrent.futures import ThreadPoolExecutor
 from db import Database
 from network import NetworkManager, DiscoveryManager
@@ -437,6 +435,7 @@ class LANMessengerApp(ctk.CTk):
 
         audit.init_logger(self.db)
         self.logger = audit.get_logger()
+        security_engine.init_engine(self.db)
         self.logger.log("APP_START", f"Application started for user {self.username}")
 
         # Thread pool for non-blocking network calls
@@ -499,8 +498,6 @@ class LANMessengerApp(ctk.CTk):
         self.after(100, lambda: self.msg_entry.focus_set())
         self.bind("<Control-f>", self.focus_search)
         self.bind("<Control-F>", self.focus_search)
-        self.bind_all("<Any-KeyPress>", self.reset_inactivity)
-        self.bind_all("<Any-ButtonPress>", self.reset_inactivity)
 
         # Activity Tracking
         self.bind_all("<KeyPress>", self._update_activity)
@@ -568,7 +565,7 @@ class LANMessengerApp(ctk.CTk):
                         self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
 
                     # Schedule UI refresh on main thread
-                    self.after(0, self._refresh_after_reap)
+                    self.after(0, lambda: self._refresh_after_reap(msg_count))
             except Exception as e:
                 print(f"[DEBUG] Reaper error: {e}")
             time.sleep(15)
@@ -662,6 +659,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_tab = self.tabview.add("Global Chat")
         self.files_tab = self.tabview.add("Files")
+        self.security_tab = self.tabview.add("Security")
         self.audit_tab = self.tabview.add("Audit Logs")
 
         # -- Chat Tab --
@@ -676,7 +674,7 @@ class LANMessengerApp(ctk.CTk):
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         self.input_frame.grid_columnconfigure(0, weight=1)
 
-        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message...")
+        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message... (Enter to send)")
         self.msg_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.msg_entry.bind("<Return>", self.send_message)
 
@@ -694,7 +692,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
         self.search_frame.grid_columnconfigure(0, weight=1)
 
-        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
+        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages... (Ctrl+F)")
         self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
         self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
         self.search_entry.bind("<KeyRelease>", self.on_search_key)
@@ -703,7 +701,7 @@ class LANMessengerApp(ctk.CTk):
         self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
         self.search_btn.grid(row=0, column=1, padx=5, pady=5)
 
-        self.clear_search_btn = ctk.CTkButton(self.search_frame, text="X", width=30, fg_color="gray", command=self.clear_search)
+        self.clear_search_btn = ctk.CTkButton(self.search_frame, text="Clear", width=60, fg_color="gray", command=self.clear_search)
         self.clear_search_btn.grid(row=0, column=2, padx=5, pady=5)
 
         # Context Menu for Message Actions
@@ -779,16 +777,38 @@ class LANMessengerApp(ctk.CTk):
 
         self.audit_display = ctk.CTkTextbox(self.audit_tab, state="disabled")
         self.audit_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.audit_display._textbox.tag_config("alert", foreground="#e74c3c", font=ctk.CTkFont(weight="bold"))
-        self.audit_display._textbox.tag_config("warning", foreground="#e67e22", font=ctk.CTkFont(weight="bold"))
-        self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
-        self.audit_display._textbox.tag_config("center", justify='center')
+        self.audit_display.tag_config("alert", foreground="#e74c3c")
+        self.audit_display.tag_config("warning", foreground="#e67e22")
+        self.audit_display.tag_config("info", foreground="#2ecc71")
+        self.audit_display.tag_config("center", justify='center')
 
         self.audit_controls = ctk.CTkFrame(self.audit_tab)
         self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
 
         self.refresh_audit_btn = ctk.CTkButton(self.audit_controls, text="Refresh Logs", command=self.refresh_audit_view)
-        self.refresh_audit_btn.pack(pady=5)
+        self.refresh_audit_btn.pack(side="left", padx=10, pady=5)
+
+        self.export_audit_btn = ctk.CTkButton(self.audit_controls, text="Export Logs (SOC 2)", command=self.export_audit_logs, fg_color="#34495e")
+        self.export_audit_btn.pack(side="right", padx=10, pady=5)
+
+        # -- Security Tab --
+        self.security_tab.grid_columnconfigure(0, weight=1)
+        self.security_tab.grid_rowconfigure(1, weight=1)
+
+        # Stats Header
+        self.sec_stats_frame = ctk.CTkFrame(self.security_tab)
+        self.sec_stats_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        self.sec_stats_frame.grid_columnconfigure((0, 1), weight=1)
+
+        self.threat_label = ctk.CTkLabel(self.sec_stats_frame, text="Total Threats Intercepted: 0", font=("Arial", 14, "bold"))
+        self.threat_label.grid(row=0, column=0, pady=10)
+
+        self.block_label = ctk.CTkLabel(self.sec_stats_frame, text="Active IP Blocks: 0", font=("Arial", 14, "bold"))
+        self.block_label.grid(row=0, column=1, pady=10)
+
+        # Blocked Peers List
+        self.blocked_scroll = ctk.CTkScrollableFrame(self.security_tab, label_text="Currently Blocked Peers")
+        self.blocked_scroll.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
 
     def refresh_audit_view(self):
         """Refreshes audit logs with non-blocking success feedback."""
@@ -798,6 +818,21 @@ class LANMessengerApp(ctk.CTk):
             if self.refresh_audit_btn.winfo_exists():
                 self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5"))
         self.after(2000, reset)
+
+    def export_audit_logs(self):
+        logs = self.db.get_audit_logs(1000)
+        try:
+            with open("audit_export.txt", "w", encoding="utf-8") as f:
+                f.write("LAN Messenger Security Audit Log Export\n")
+                f.write("======================================\n")
+                for log in logs:
+                    ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+                    ip = log[4] or "N/A"
+                    f.write(f"[{ts}] [{ip}] {log[1]}: {log[2]}\n")
+            messagebox.showinfo("Export Successful", "Audit logs exported to audit_export.txt")
+            self.logger.log("AUDIT_EXPORT", "Audit logs exported to file.")
+        except Exception as e:
+            messagebox.showerror("Export Failed", f"Could not export logs: {e}")
 
     def load_audit_logs(self):
         if not self.winfo_exists() or self.tabview.get() != "Audit Logs":
@@ -809,20 +844,35 @@ class LANMessengerApp(ctk.CTk):
         if not logs:
             self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
         else:
-            lines = []
+            # Event type mapping to semantic tags
+            tag_map = {
+                "SECURITY_ALERT": "alert",
+                "FILE_INTEGRITY_FAILURE": "alert",
+                "AUTH_FAILURE": "warning",
+                "FILE_TRANSFER": "info",
+                "FILE_INTEGRITY_SUCCESS": "info",
+                "CONNECTION": "info",
+                "APP_START": "info",
+                "DATA_RETENTION": "info",
+                "SETTINGS_CHANGE": "info",
+                "TOFU_TRUST": "info",
+                "SECURITY_INFO": "info"
+            }
+
             for log in logs:
                 # log: (id, event_type, details, timestamp)
                 event_type = log[1]
                 ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
-                lines.append(f"[{ts}] {event_type}: {log[2]}")
-
-            if lines:
-                self.audit_display.insert("end", "\n".join(lines) + "\n")
-            else:
-                self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+                tag = tag_map.get(event_type, "")
+                self.audit_display.insert("end", f"[{ts}] {event_type}: {log[2]}\n", tag)
 
         self.audit_display.configure(state="disabled")
         self.audit_display.see("1.0")
+
+        # Provide success feedback
+        original_fg = self.refresh_audit_btn.cget("fg_color")
+        self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        self.after(1500, lambda: self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=original_fg) if self.refresh_audit_btn.winfo_exists() else None)
 
     def update_username(self, event=None):
         new_name = self.username_entry.get().strip()
@@ -854,8 +904,12 @@ class LANMessengerApp(ctk.CTk):
         PeerSecurityDialog(self, self.db, ip, name, self.refresh_peers)
 
     def refresh_peers(self):
-        # Update peer trust levels from DB in batch
-        trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
+        # Batch fetch peer data from DB to reduce lock contention and roundtrips
+        peer_ips = list(self.peers.keys())
+        trust_levels = self.db.get_peer_trust_levels(peer_ips)
+        all_perms = self.db.get_peers_permissions(peer_ips)
+
+        # Update internal state from batch results
         for ip in self.peers:
             self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
 
@@ -900,7 +954,7 @@ class LANMessengerApp(ctk.CTk):
 
             # Security button
             btn_sec = ctk.CTkButton(row, text="Sec", width=35, height=20, fg_color="#555555",
-                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+                              command=lambda i=ip, n=name: PeerSecurityDialog(self, self.db, i, n, self.refresh_peers))
             btn_sec.pack(side="right", padx=2)
 
             btn_browse = ctk.CTkButton(row, text="Browse", width=60, height=20,
@@ -979,6 +1033,40 @@ class LANMessengerApp(ctk.CTk):
                 self.after(2000, lambda: btn.configure(text="Connect", fg_color=("#3B8ED0", "#1F6AA5")) if btn.winfo_exists() else None)
         self.after(0, update_ui)
 
+    def refresh_security_dashboard(self):
+        if not self.winfo_exists() or self.tabview.get() != "Security":
+            return
+
+        # Update Stats
+        logs = self.db.get_audit_logs(1000)
+        suspicious = [l for l in logs if l[1] in ('AUTH_FAILURE', 'SECURITY_ALERT', 'UNAUTHORIZED_ACCESS', 'PROTOCOL_VIOLATION', 'IPS_AUTO_BLOCK')]
+        self.threat_label.configure(text=f"Total Threats Intercepted: {len(suspicious)}")
+
+        blocked = self.db.get_blocked_peers()
+        self.block_label.configure(text=f"Active IP Blocks: {len(blocked)}")
+
+        # Update List
+        for widget in self.blocked_scroll.winfo_children():
+            widget.destroy()
+
+        if not blocked:
+             lbl = ctk.CTkLabel(self.blocked_scroll, text="No active IP blocks.", font=("Arial", 12, "italic"), text_color="gray")
+             lbl.pack(pady=40)
+        else:
+            for ip, name in blocked:
+                row = ctk.CTkFrame(self.blocked_scroll)
+                row.pack(fill="x", pady=2, padx=5)
+
+                ctk.CTkLabel(row, text=f"{name} ({ip})").pack(side="left", padx=10)
+                ctk.CTkButton(row, text="Unblock", width=80, height=24, fg_color="#27ae60", hover_color="#2ecc71",
+                               command=lambda i=ip: self.unblock_ip_action(i)).pack(side="right", padx=10, pady=5)
+
+    def unblock_ip_action(self, ip):
+        self.db.unblock_peer(ip)
+        self.logger.log("SECURITY_POLICY_CHANGE", f"Manually unblocked IP: {ip}")
+        self.refresh_security_dashboard()
+        self.refresh_peers()
+
     def on_tab_change(self):
         tab = self.tabview.get()
         if tab == "Global Chat":
@@ -986,6 +1074,8 @@ class LANMessengerApp(ctk.CTk):
             self.load_chat_history(debounce=False)
         elif tab == "Audit Logs":
             self.load_audit_logs()
+        elif tab == "Security":
+            self.refresh_security_dashboard()
         elif tab.startswith("Chat: "):
             peer_ip = self.private_chat_tabs.get(tab)
             if peer_ip:
@@ -993,6 +1083,11 @@ class LANMessengerApp(ctk.CTk):
                 if peer_ip in self.private_entries:
                     self.private_entries[peer_ip].focus_set()
                 self.load_private_chat(peer_ip, debounce=False)
+
+    def focus_search(self, event=None):
+        """Switches to Global Chat and focuses the search entry (Ctrl+F)."""
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
 
     def on_search_key(self, event):
         # Throttle live search
