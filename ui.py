@@ -39,6 +39,7 @@ class MasterPasswordDialog(ctk.CTkToplevel):
 
         self.after(100, lambda: self.password_entry.focus_set())
         self.grab_set()
+        self.bind("<Escape>", lambda e: self.on_cancel())
 
     def on_submit(self, event=None):
         password = self.password_entry.get()
@@ -90,6 +91,7 @@ class PeerSecurityDialog(ctk.CTkToplevel):
 
         self.transient(parent)
         self.grab_set()
+        self.bind("<Escape>", lambda e: self.destroy())
 
         # Load current perms
         self.peer_info = self.db.get_trusted_peer(peer_ip)
@@ -270,6 +272,7 @@ class PasswordDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
         self.entry.focus_set()
+        self.bind("<Escape>", lambda e: self.on_cancel())
         self.master.wait_window(self)
 
     def on_ok(self, event=None):
@@ -655,9 +658,6 @@ class LANMessengerApp(ctk.CTk):
 
         self.settings_btn = ctk.CTkButton(self.sidebar_frame, text="Settings", command=self.open_settings)
         self.settings_btn.grid(row=5, column=0, padx=20, pady=5)
-
-        self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", command=self.lock_app, fg_color="#555555")
-        self.lock_btn.grid(row=5, column=0, padx=20, pady=(0, 10))
 
         self.add_peer_btn = ctk.CTkButton(self.sidebar_frame, text="Info / Connect IP", command=self.add_manual_peer)
         self.add_peer_btn.grid(row=6, column=0, padx=20, pady=(0, 20))
