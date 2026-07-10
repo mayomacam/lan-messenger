@@ -119,7 +119,7 @@ class FileTransferManager:
         try:
             client.settimeout(10)
 
-            # Security check: granular permissions (is_blocked)
+            # Security check: granular permissions (is_blocked) - Cached locally for reuse
             perms = self.db.get_peer_permissions(addr[0])
             if perms.get('is_blocked'):
                 if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: Peer is blocked.")
@@ -130,13 +130,6 @@ class FileTransferManager:
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 if logger: logger.log("SECURITY_ALERT", f"File transfer connection from {addr[0]} rejected: IP not allowed.")
                 client.sendall(json.dumps({'status': 'ERR', 'msg': 'IP not allowed'}).encode())
-                return
-
-            # Check if peer is blocked
-            perms = self.db.get_peer_permissions(addr[0])
-            if perms.get('is_blocked'):
-                if logger: logger.log("SECURITY_ALERT", f"File transfer connection from blocked peer {addr[0]} rejected.")
-                client.sendall(json.dumps({'status': 'ERR', 'msg': 'Peer is blocked'}).encode())
                 return
 
             header_raw = client.recv(4096).decode()
@@ -161,19 +154,8 @@ class FileTransferManager:
                     return
                 # token matches – continue processing
 
-            # Granular permission check
-            perms = self.db.get_peer_permissions(addr[0])
-            if perms.get('is_blocked'):
-                client.sendall(json.dumps({'status': 'ERR', 'msg': 'Access denied'}).encode())
-                return
-
             cmd = req.get('cmd')
             if not isinstance(cmd, str): return
-
-            # Granular permission check
-            perms = self.db.get_peer_permissions(addr[0])
-            if perms.get('is_blocked'):
-                return
 
             if cmd == 'PUSH_FILE':
                 # Enforce can_download_files (peer pushing to us is like we downloading from them,

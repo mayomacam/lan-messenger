@@ -21,6 +21,11 @@ class DiscoveryManager:
         self.udp_port = UDP_BROADCAST_PORT
         self.running = True
 
+        # Cache for discovery packets to avoid repeated serialization and hashing
+        self._cached_packet = None
+        self._last_cached_username = None
+        self._cached_hash = None
+
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         try:
@@ -44,17 +49,22 @@ class DiscoveryManager:
     def broadcast_loop(self):
         while self.running:
             try:
-                packet = {
-                    'type': 'DISCOVERY',
-                    'username': self.username,
-                    'port': self.chat_port
-                }
-                h = self._get_discovery_hash()
-                if h:
-                    packet['hash'] = h
+                # Use cached packet if username hasn't changed
+                if self._cached_packet is None or self.username != self._last_cached_username:
+                    packet = {
+                        'type': 'DISCOVERY',
+                        'username': self.username,
+                        'port': self.chat_port
+                    }
+                    if self.auth_token:
+                        if self._cached_hash is None or self.username != self._last_cached_username:
+                             self._cached_hash = self._get_discovery_hash()
+                        packet['hash'] = self._cached_hash
 
-                data = json.dumps(packet)
-                self.sock.sendto(data.encode(), (BROADCAST_IP, self.udp_port))
+                    self._cached_packet = json.dumps(packet).encode()
+                    self._last_cached_username = self.username
+
+                self.sock.sendto(self._cached_packet, (BROADCAST_IP, self.udp_port))
             except Exception as e:
                 print(f"[DEBUG] Discovery broadcast error: {e}")
             time.sleep(5)
@@ -280,7 +290,7 @@ class NetworkManager:
         try:
             client.settimeout(10)
 
-            # Security check: granular permissions (is_blocked)
+            # Security check: granular permissions (cached in local variable for reuse)
             perms = self.db.get_peer_permissions(addr[0])
             if perms.get('is_blocked'):
                 msg = f"Connection from {addr[0]} rejected: Peer is blocked."
@@ -295,15 +305,6 @@ class NetworkManager:
                 print(f"[DEBUG] {msg}")
                 if logger: logger.log("SECURITY_ALERT", msg)
                 self._send_json(client, {'status': 'ERR', 'msg': 'IP not allowed'})
-                return
-
-            # Check if peer is blocked
-            perms = self.db.get_peer_permissions(addr[0])
-            if perms.get('is_blocked'):
-                msg = f"Connection from blocked peer {addr[0]} rejected."
-                print(f"[DEBUG] {msg}")
-                if logger: logger.log("SECURITY_ALERT", msg)
-                self._send_json(client, {'status': 'ERR', 'msg': 'Peer is blocked'})
                 return
 
             data = self._recv_json(client)
@@ -325,21 +326,10 @@ class NetworkManager:
                     self._send_json(client, {'status': 'ERR', 'msg': 'Authentication failed'})
                     return
 
-            # Granular permission check
-            perms = self.db.get_peer_permissions(addr[0])
-            if perms.get('is_blocked'):
-                self._send_json(client, {'status': 'ERR', 'msg': 'Access denied: blocked'})
-                return
-
             # Existing message handling with validation
             msg_type = data.get('type')
             if not isinstance(msg_type, str):
                 return
-
-            # Granular permission check
-            perms = self.db.get_peer_permissions(addr[0])
-            if perms.get('is_blocked'):
-                return # Already handled at accept but defense in depth
 
             if msg_type in ('MSG', 'MSG_PRIV', 'MSG_EDIT', 'MSG_DEL'):
                 if not perms.get('can_chat'):

@@ -37,3 +37,7 @@
 ## 2025-05-24 - [UI Refresh Cycles with Debouncing and Lazy Loading]
 **Learning:** Polling loops and unconditioned UI updates (e.g., refreshing all chat tabs when only one is visible) are major performance sinks in GUI apps. Implementing visibility checks (lazy loading) and debouncing (throttling) ensures that CPU-intensive rendering and database queries only occur when necessary.
 **Action:** Always check widget visibility or tab state before performing heavy UI updates. Use a standard debounce pattern (e.g., 100ms) for high-frequency events to prevent UI lag.
+
+## 2026-07-03 - [LRU Caching & Dependency Management]
+**Learning:** Using `@functools.lru_cache` on instance methods can be tricky regarding cache invalidation and dependencies. Forgetting to import `functools` in the module leads to runtime crashes that tests might miss if they don't exercise the specific cached path. Also, when refactoring core classes like `Database`, ensure that internal components like `EncryptionManager` maintain a consistent interface (`is_locked`, `lock`) to avoid `AttributeError` during concurrent execution.
+**Action:** Always verify imports for decorators. Maintain strict interface parity when refactoring internal managers. Clear caches within the same lock that protects the underlying data to ensure consistency.
