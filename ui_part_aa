@@ -1,0 +1,500 @@
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import filedialog, messagebox, Menu
+import socket
+import os
+import threading
+import time
+import shutil
+import json
+import audit
+import ssl_utils
+import pyotp
+import qrcode
+from PIL import Image, ImageTk
+from concurrent.futures import ThreadPoolExecutor
+from db import Database
+from network import NetworkManager, DiscoveryManager
+from file_transfer import FileTransferManager
+from config import load_settings, save_settings
+
+class MasterPasswordDialog(ctk.CTkToplevel):
+    def __init__(self, parent, callback):
+        super().__init__(parent)
+        self.title("Unlock LAN Messenger")
+        self.geometry("400x250")
+        self.callback = callback
+
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(self, text="Master Password Required", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, pady=(30, 10))
+        ctk.CTkLabel(self, text="Enter password to unlock the application and database.", font=ctk.CTkFont(size=12)).grid(row=1, column=0, pady=(0, 20))
+
+        self.password_entry = ctk.CTkEntry(self, placeholder_text="Master Password", show="*")
+        self.password_entry.grid(row=2, column=0, padx=50, pady=10, sticky="ew")
+        self.password_entry.bind("<Return>", self.on_submit)
+
+        self.submit_btn = ctk.CTkButton(self, text="Unlock", command=self.on_submit)
+        self.submit_btn.grid(row=3, column=0, pady=20)
+
+        self.after(100, lambda: self.password_entry.focus_set())
+        self.grab_set()
+
+    def on_submit(self, event=None):
+        password = self.password_entry.get()
+        if not password:
+            return
+        self.callback(password, self)
+
+    def on_cancel(self):
+        self.master.destroy()
+
+class LockScreen(ctk.CTkFrame):
+    def __init__(self, parent, unlock_callback):
+        super().__init__(parent, fg_color=("#DBDBDB", "#2B2B2B"))
+        self.unlock_callback = unlock_callback
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 4), weight=1)
+
+        ctk.CTkLabel(self, text="Application Locked", font=ctk.CTkFont(size=30, weight="bold")).grid(row=1, column=0, pady=20)
+
+        self.pass_entry = ctk.CTkEntry(self, placeholder_text="Master Password", show="*", width=300)
+        self.pass_entry.grid(row=2, column=0, pady=10)
+        self.pass_entry.bind("<Return>", self.on_unlock)
+
+        self.unlock_btn = ctk.CTkButton(self, text="Unlock App", command=self.on_unlock)
+        self.unlock_btn.grid(row=3, column=0, pady=20)
+
+        self.pass_entry.focus_set()
+
+    def on_unlock(self, event=None):
+        password = self.pass_entry.get()
+        if self.unlock_callback(password):
+            self.destroy()
+        else:
+            self.pass_entry.delete(0, "end")
+            messagebox.showerror("Error", "Invalid Password")
+
+class PeerSecurityDialog(ctk.CTkToplevel):
+    def __init__(self, parent, db, peer_ip, peer_name, on_update_cb=None):
+        super().__init__(parent)
+        self.title(f"Security: {peer_name}")
+        self.geometry("450x600")
+        self.db = db
+        self.peer_ip = peer_ip
+        self.peer_name = peer_name
+        self.on_update_cb = on_update_cb
+        self.logger = audit.get_logger()
+
+        self.transient(parent)
+        self.grab_set()
+
+        # Load current perms
+        self.peer_info = self.db.get_trusted_peer(peer_ip)
+        self.perms = self.db.get_peer_permissions(peer_ip)
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(self, text=f"Manage Peer: {peer_name}", font=("Arial", 16, "bold")).grid(row=0, column=0, pady=20)
+        ctk.CTkLabel(self, text=f"IP: {peer_ip}", font=("Arial", 12)).grid(row=1, column=0, pady=(0, 20))
+
+        # --- Safety Number Section ---
+        sn_frame = ctk.CTkFrame(self)
+        sn_frame.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
+        ctk.CTkLabel(sn_frame, text="Safety Number (Verification Code)", font=("Arial", 12, "bold")).pack(pady=(10, 5))
+
+        my_fp = ssl_utils.get_local_fingerprint()
+        peer_fp = self.peer_info[2] if self.peer_info else None
+        safety_number = ssl_utils.get_safety_number(my_fp, peer_fp)
+
+        sn_display = ctk.CTkLabel(sn_frame, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
+        sn_display.pack(pady=5)
+        ctk.CTkLabel(sn_frame, text="Verify this code with the peer out-of-band.", font=("Arial", 10, "italic")).pack(pady=(0, 10))
+
+        # Verified Toggle
+        self.verified_var = ctk.BooleanVar(value=bool(self.perms.get('is_verified', False)))
+        self.verify_chk = ctk.CTkSwitch(self, text="VERIFIED IDENTITY", variable=self.verified_var, progress_color="green")
+        self.verify_chk.grid(row=3, column=0, pady=10, padx=40, sticky="w")
+
+        # Blocked
+        self.blocked_var = ctk.BooleanVar(value=bool(self.perms.get('is_blocked', False)))
+        self.block_chk = ctk.CTkSwitch(self, text="BLOCK PEER", variable=self.blocked_var, progress_color="red")
+        self.block_chk.grid(row=4, column=0, pady=10, padx=40, sticky="w")
+
+        ctk.CTkLabel(self, text="Granular Permissions:", font=("Arial", 12, "bold")).grid(row=5, column=0, pady=(20, 10), padx=40, sticky="w")
+
+        # Chat
+        self.chat_var = ctk.BooleanVar(value=bool(self.perms.get('can_chat', True)))
+        self.chat_chk = ctk.CTkSwitch(self, text="Can Chat", variable=self.chat_var)
+        self.chat_chk.grid(row=6, column=0, pady=5, padx=60, sticky="w")
+
+        # List Files
+        self.list_var = ctk.BooleanVar(value=bool(self.perms.get('can_list_files', True)))
+        self.list_chk = ctk.CTkSwitch(self, text="Can Browse Files", variable=self.list_var)
+        self.list_chk.grid(row=7, column=0, pady=5, padx=60, sticky="w")
+
+        # Download Files
+        self.down_var = ctk.BooleanVar(value=bool(self.perms.get('can_download_files', True)))
+        self.down_chk = ctk.CTkSwitch(self, text="Can Download Files", variable=self.down_var)
+        self.down_chk.grid(row=8, column=0, pady=5, padx=60, sticky="w")
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=9, column=0, pady=30)
+
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.destroy).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Save", width=100, command=self.save).pack(side="left", padx=10)
+
+    def save(self):
+        new_perms = {
+            'is_blocked': 1 if self.blocked_var.get() else 0,
+            'can_chat': 1 if self.chat_var.get() else 0,
+            'can_list_files': 1 if self.list_var.get() else 0,
+            'can_download_files': 1 if self.down_var.get() else 0,
+            'is_verified': 1 if self.verified_var.get() else 0
+        }
+        self.db.update_peer_permissions(self.peer_ip, new_perms)
+
+        if self.logger:
+            self.logger.log("SECURITY_POLICY_CHANGE", f"Updated permissions for {self.peer_name} ({self.peer_ip}): {new_perms}")
+
+        if self.on_update_cb:
+            self.on_update_cb()
+        elif hasattr(self.master, 'refresh_peers'):
+            self.master.refresh_peers()
+        self.destroy()
+
+class MFASetupDialog(ctk.CTkToplevel):
+    def __init__(self, parent, db, on_complete_cb=None):
+        super().__init__(parent)
+        self.title("MFA Setup")
+        self.geometry("450x650")
+        self.db = db
+        self.on_complete_cb = on_complete_cb
+        self.secret = pyotp.random_base32()
+        self.logger = audit.get_logger()
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(self, text="Multi-Factor Authentication Setup", font=("Arial", 20, "bold")).grid(row=0, column=0, pady=20)
+        ctk.CTkLabel(self, text="1. Scan the QR code with your Authenticator app", font=("Arial", 12)).grid(row=1, column=0, pady=10)
+
+        # Generate QR Code
+        totp_uri = pyotp.totp.TOTP(self.secret).provisioning_uri(name="User", issuer_name="LAN Messenger")
+        qr = qrcode.QRCode(version=1, box_size=5, border=2)
+        qr.add_data(totp_uri)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+
+        # Convert to PhotoImage
+        self.qr_photo = ImageTk.PhotoImage(qr_img)
+        self.qr_label = ctk.CTkLabel(self, image=self.qr_photo, text="")
+        self.qr_label.grid(row=2, column=0, pady=10)
+
+        ctk.CTkLabel(self, text=f"Secret Key: {self.secret}", font=("Courier", 12)).grid(row=3, column=0, pady=5)
+
+        ctk.CTkLabel(self, text="2. Enter the 6-digit code to verify", font=("Arial", 12)).grid(row=4, column=0, pady=(20, 5))
+        self.verify_entry = ctk.CTkEntry(self, placeholder_text="000000", width=150)
+        self.verify_entry.grid(row=5, column=0, pady=5)
+        self.verify_entry.bind("<Return>", lambda e: self.verify_and_save())
+
+        self.status_label = ctk.CTkLabel(self, text="")
+        self.status_label.grid(row=6, column=0, pady=5)
+
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_frame.grid(row=7, column=0, pady=20)
+
+        ctk.CTkButton(self.btn_frame, text="Cancel", fg_color="gray", command=self.destroy).pack(side="left", padx=10)
+        self.save_btn = ctk.CTkButton(self.btn_frame, text="Verify & Enable", command=self.verify_and_save)
+        self.save_btn.pack(side="left", padx=10)
+
+        self.transient(parent)
+        self.grab_set()
+
+    def verify_and_save(self):
+        code = self.verify_entry.get().strip()
+        totp = pyotp.TOTP(self.secret)
+        if totp.verify(code):
+            self.db.set_config("mfa_secret", self.secret, encrypt=True)
+            self.db.set_config("mfa_enabled", "1")
+            if self.logger:
+                self.logger.log("MFA_ENABLED", "TOTP Multi-Factor Authentication enabled.")
+            messagebox.showinfo("Success", "MFA has been successfully enabled!")
+            if self.on_complete_cb:
+                self.on_complete_cb()
+            self.destroy()
+        else:
+            self.status_label.configure(text="Invalid code. Please try again.", text_color="red")
+            self.verify_entry.delete(0, "end")
+
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("blue")
+
+class PasswordDialog(ctk.CTkToplevel):
+    def __init__(self, parent, title="Authentication Required"):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("400x200")
+        self.result = None
+
+        self.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self, text="Enter Master Password:", font=("Arial", 14)).grid(row=0, column=0, pady=20)
+
+        self.entry = ctk.CTkEntry(self, show="*", width=300)
+        self.entry.grid(row=1, column=0, padx=20, pady=10)
+        self.entry.bind("<Return>", self.on_ok)
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=2, column=0, pady=20)
+
+        ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.on_cancel).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="OK", width=100, command=self.on_ok).pack(side="left", padx=10)
+
+        self.transient(parent)
+        self.grab_set()
+        self.entry.focus_set()
+        self.master.wait_window(self)
+
+    def on_ok(self, event=None):
+        self.result = self.entry.get()
+        self.destroy()
+
+    def on_cancel(self):
+        self.destroy()
+
+class LockScreen(ctk.CTkFrame):
+    def __init__(self, parent, password_callback):
+        super().__init__(parent, fg_color="#1a1a1a")
+        self.password_callback = password_callback
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 4), weight=1)
+
+        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
+
+        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
+        self.entry.grid(row=2, column=0, pady=10)
+        self.entry.bind("<Return>", self.on_unlock)
+
+        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
+        self.unlock_btn.grid(row=3, column=0, pady=20)
+
+        self.entry.focus_set()
+
+        self.configure(fg_color="#1a1a1a")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 4), weight=1)
+
+        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
+
+        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
+        self.entry.grid(row=2, column=0, pady=10)
+        self.entry.bind("<Return>", self.on_unlock)
+
+        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
+        self.unlock_btn.grid(row=3, column=0, pady=20)
+
+        self.entry.focus_set()
+        self.grab_set()
+
+    def on_unlock(self, event=None):
+        pw = self.entry.get()
+        if self.password_callback(pw):
+            self.destroy()
+        else:
+            self.entry.delete(0, "end")
+            self.entry.configure(placeholder_text="Invalid Password!", placeholder_text_color="red")
+
+class LockScreen(ctk.CTkFrame):
+    def __init__(self, parent, db, on_unlock):
+        super().__init__(parent, fg_color=parent._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"]))
+        self.db = db
+        self.on_unlock = on_unlock
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.grab_set()
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure((0, 1, 2, 3), weight=1)
+
+        inner_frame = ctk.CTkFrame(self)
+        inner_frame.grid(row=1, column=0, padx=20, pady=20)
+
+        self.title_label = ctk.CTkLabel(inner_frame, text="Application Locked", font=("Arial", 24, "bold"))
+        self.title_label.pack(pady=20, padx=40)
+
+        self.info_label = ctk.CTkLabel(inner_frame, text="Please enter your Master Password")
+        self.info_label.pack(pady=10)
+
+        self.password_entry = ctk.CTkEntry(inner_frame, show="*", width=250, placeholder_text="Master Password")
+        self.password_entry.pack(pady=10, padx=40)
+        self.password_entry.bind("<Return>", lambda e: self.attempt_unlock())
+
+        # MFA Entry (Initially hidden)
+        self.mfa_entry = ctk.CTkEntry(inner_frame, width=250, placeholder_text="TOTP Code (6-digits)")
+        self.mfa_enabled = self.db.get_config("mfa_enabled") == "1"
+        if self.mfa_enabled:
+            self.mfa_entry.pack(pady=10, padx=40)
+            self.mfa_entry.bind("<Return>", lambda e: self.attempt_unlock())
+
+        self.btn = ctk.CTkButton(inner_frame, text="Unlock", command=self.attempt_unlock)
+        self.btn.pack(pady=20)
+
+        if self.db.needs_setup():
+            self.title_label.configure(text="Initial Security Setup")
+            self.info_label.configure(text="Create a Master Password to protect your database")
+            self.btn.configure(text="Setup & Unlock")
+
+        self.password_entry.focus_set()
+
+    def attempt_unlock(self):
+        password = self.password_entry.get()
+        if not password:
+            return
+
+        if self.db.needs_setup():
+            self.db.setup(password)
+            audit.get_logger().log("MASTER_PASSWORD_SETUP", "Initial master password configured.")
+            self.on_unlock()
+            self.destroy()
+        else:
+            if self.db.unlock(password):
+                # Check MFA if enabled
+                if self.mfa_enabled:
+                    mfa_code = self.mfa_entry.get().strip()
+                    mfa_secret = self.db.get_config("mfa_secret", decrypt=True)
+                    if not mfa_secret:
+                        # Fallback if secret is missing but enabled
+                        audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked (MFA Secret Missing).")
+                        self.on_unlock()
+                        self.destroy()
+                        return
+
+                    totp = pyotp.TOTP(mfa_secret)
+                    if totp.verify(mfa_code):
+                        audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked with MFA.")
+                        self.on_unlock()
+                        self.destroy()
+                    else:
+                        audit.get_logger().log("MFA_VERIFY_FAILURE", "Failed MFA verification attempt.")
+                        self.info_label.configure(text="Invalid TOTP Code! Try again.", text_color="red")
+                        self.mfa_entry.delete(0, "end")
+                        # Re-lock the DB because password was correct but MFA failed
+                        self.db.lock_db()
+                else:
+                    audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked.")
+                    self.on_unlock()
+                    self.destroy()
+            else:
+                audit.get_logger().log("INVALID_PASSWORD_ATTEMPT", "Failed unlock attempt.")
+                self.info_label.configure(text="Invalid Password! Try again.", text_color="red")
+                self.password_entry.delete(0, "end")
+
+class LANMessengerApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.withdraw() # Hide main window until unlocked
+        self.title("LAN Messenger")
+        self.geometry("1100x700")
+
+        self._chat_history_after_id = None
+        self._lock_timer_id = None
+        self._inactivity_timeout = 300000 # 5 minutes in ms
+
+        # Load Settings
+        self.settings = load_settings()
+        self._master_password = None
+        self._last_activity = time.time()
+        self._lock_timeout = 300
+        self._locked = False
+
+        # Prompt for password
+        while True:
+            password = self._prompt_password()
+            if not password:
+                self.destroy()
+                return
+
+            try:
+                self.db = Database(password)
+                self._master_password = password
+                break
+            except ValueError as e:
+                messagebox.showerror("Error", f"Authentication failed: {e}")
+
+        self.deiconify() # Show app
+        self._chat_history_after_id = None
+
+        # State
+        self.username = self.settings.get("username", "")
+
+        # Prompt for username if not set
+        if not self.username or self.username.startswith("User_"):
+            self.prompt_username()
+
+        audit.init_logger(self.db)
+        self.logger = audit.get_logger()
+        self.logger.log("APP_START", f"Application started for user {self.username}")
+
+        # Thread pool for non-blocking network calls
+        self.executor = ThreadPoolExecutor(max_workers=5)
+
+        # Init Networking with Configured Ports
+        self.file_manager = FileTransferManager(
+            self.db,
+            port=self.settings["tcp_file_port"],
+            bind_ip=self.settings.get("bind_ip", "0.0.0.0"),
+            auth_token=self.settings.get("auth_token") or None,
+            allowed_ips=self.settings.get("allowed_ips") or None,
+        )
+        self.network = NetworkManager(
+            self.db,
+            port=self.settings["tcp_chat_port"],
+            callback_update_ui=self.on_network_event,
+            auth_token=self.settings.get("auth_token") or None,
+            allowed_ips=self.settings.get("allowed_ips") or None,
+        )
+
+        self.discovery = DiscoveryManager(
+            username=self.username,
+            chat_port=self.settings["tcp_chat_port"],
+            callback_new_peer=lambda ip, name: self.on_network_event('NEW_PEER', ip, name),
+            auth_token=self.settings.get("auth_token") or None
+        )
+
+        self.peers = {} # ip -> username
+        self.peer_trust = {} # ip -> trust_level
+        self.private_chats = {} # ip -> CTkTextbox
+        self.private_chat_tabs = {} # tab_name -> ip
+        self.private_entries = {} # ip -> CTkEntry
+        self._private_chat_after_ids = {} # ip -> after_id
+        self._last_peers_snapshot = ""
+        self._last_search_query = ""
+        self.current_private_peer = None
+        self.current_file_view_source = "Local" # "Local" or IP
+
+        # Layout
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        # UI Components
+        self.create_sidebar()
+        self.create_main_area()
+
+        # App Locking
+        self.lock_screen = None
+        self.check_lock()
+
+        # Inactivity tracking
+        self.bind("<Any-KeyPress>", self._reset_lock_timer)
+        self.bind("<Any-Button>", self._reset_lock_timer)
+        self._reset_lock_timer()
+
+        # Periodic Updates
+        self.after(2000, self.refresh_peers)
+        self.load_chat_history()
+        self.after(100, lambda: self.msg_entry.focus_set())
+        self.bind("<Control-f>", self.focus_search)

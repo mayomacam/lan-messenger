@@ -1,0 +1,500 @@
+        self.bind("<Control-F>", self.focus_search)
+        self.bind_all("<Any-KeyPress>", self.reset_inactivity)
+        self.bind_all("<Any-ButtonPress>", self.reset_inactivity)
+
+        # Activity Tracking
+        self.bind_all("<KeyPress>", self._update_activity)
+        self.bind_all("<Button>", self._update_activity)
+
+        # Start Message Reaper
+        self.reaper_thread = threading.Thread(target=self.message_reaper_loop, daemon=True)
+        self.reaper_thread.start()
+
+        # Start inactivity checker
+        self.after(10000, self._check_inactivity)
+
+    def _update_activity(self, event=None):
+        self._last_activity = time.time()
+
+    def _check_inactivity(self):
+        if time.time() - self._last_activity > self._lock_timeout:
+            self.lock_app()
+        self.after(10000, self._check_inactivity)
+
+    def lock_app(self):
+        if not self._locked:
+            self._locked = True
+            LockScreen(self, self._verify_unlock)
+
+    def _verify_unlock(self, password):
+        if password == self._master_password:
+            self._locked = False
+            self._update_activity()
+            return True
+        return False
+
+    def _prompt_password(self):
+        pw_dialog = PasswordDialog(self)
+        return pw_dialog.result
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+
+    def _refresh_after_reap(self):
+        """Thread-safe UI refresh after background reaping."""
+        if not self.winfo_exists():
+            return
+        # Only refresh visible chat tabs to save resources
+        current_tab = self.tabview.get()
+        if current_tab == "Global Chat":
+            self.load_chat_history(debounce=True)
+        elif current_tab.startswith("Chat: "):
+            if self.current_private_peer:
+                self.load_private_chat(self.current_private_peer)
+
+    def message_reaper_loop(self):
+        """Background thread for periodic database maintenance (runs every 15s)."""
+        while True:
+            try:
+                # Reap messages and files in background
+                msg_count = self.db.reap_expired_messages()
+                file_count = self.db.delete_expired_files()
+
+                if msg_count > 0 or file_count > 0:
+                    if msg_count > 0:
+                        self.logger.log("DATA_RETENTION", f"Automatically reaped {msg_count} expired messages.")
+                    if file_count > 0:
+                        self.logger.log("DATA_RETENTION", f"Automatically reaped {file_count} expired file shares.")
+
+                    # Schedule UI refresh on main thread
+                    self.after(0, self._refresh_after_reap)
+            except Exception as e:
+                print(f"[DEBUG] Reaper error: {e}")
+            time.sleep(15)
+
+    def prompt_username(self):
+        dialog = ctk.CTkInputDialog(text="Enter your username:", title="Set Username")
+        name = dialog.get_input()
+        if name and name.strip():
+            self.username = name.strip()
+            self.settings["username"] = self.username
+            save_settings(self.settings)
+        else:
+            # Fallback to default
+            self.username = "User_" + str(int(time.time()))[-4:]
+            self.settings["username"] = self.username
+            save_settings(self.settings)
+
+    def on_network_event(self, event_type, *args):
+        # Dispatch to main thread
+        if self.winfo_exists():
+            self.after(0, lambda: self._handle_event(event_type, *args))
+
+    def _handle_event(self, event_type, *args):
+        if event_type == 'NEW_PEER':
+            ip, name = args[0], args[1]
+            is_new_peer = ip not in self.peers
+            self.peers[ip] = name
+            if is_new_peer:
+                self.executor.submit(self.network.send_hello, ip, self.username)
+        elif event_type == 'MSG':
+             self.load_chat_history(debounce=True)
+        elif event_type == 'MSG_PRIV':
+             peer_ip = args[3]
+             if peer_ip in self.private_chats:
+                 self.load_private_chat(peer_ip)
+             else:
+                 sender_name = self.peers.get(peer_ip, args[1])
+                 self.open_private_chat(peer_ip, sender_name)
+        elif event_type in ['EDIT', 'DELETE']:
+             self.load_chat_history(debounce=True)
+        elif event_type == 'SECURITY_ALERT':
+             msg = args[0]
+             messagebox.showwarning("Security Alert", msg)
+
+    def create_sidebar(self):
+        self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+
+        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="LAN Messenger", font=ctk.CTkFont(size=20, weight="bold"))
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+
+        username_frame = ctk.CTkFrame(self.sidebar_frame)
+        username_frame.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
+
+        ctk.CTkLabel(username_frame, text="User:").pack(side="left", padx=(5, 2))
+        self.username_entry = ctk.CTkEntry(username_frame, placeholder_text="Username")
+        self.username_entry.insert(0, self.username)
+        self.username_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.username_entry.bind("<Return>", self.update_username)
+
+        self.change_name_btn = ctk.CTkButton(username_frame, text="Set", width=50, command=self.update_username)
+        self.change_name_btn.pack(side="right")
+
+        self.peers_label = ctk.CTkLabel(self.sidebar_frame, text="Active Peers:", anchor="w")
+        self.peers_label.grid(row=2, column=0, padx=20, pady=(10, 0))
+
+        self.peers_scroll = ctk.CTkScrollableFrame(self.sidebar_frame, width=180, label_text="Peers")
+        self.peers_scroll.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
+
+        self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", fg_color="#e74c3c", hover_color="#c0392b", command=self.lock_app)
+        self.lock_btn.grid(row=4, column=0, padx=20, pady=5)
+
+        self.settings_btn = ctk.CTkButton(self.sidebar_frame, text="Settings", command=self.open_settings)
+        self.settings_btn.grid(row=5, column=0, padx=20, pady=5)
+
+        self.lock_btn = ctk.CTkButton(self.sidebar_frame, text="Lock App", command=self.lock_app, fg_color="#555555")
+        self.lock_btn.grid(row=5, column=0, padx=20, pady=(0, 10))
+
+        self.add_peer_btn = ctk.CTkButton(self.sidebar_frame, text="Info / Connect IP", command=self.add_manual_peer)
+        self.add_peer_btn.grid(row=6, column=0, padx=20, pady=(0, 20))
+
+        self.sidebar_frame.grid_rowconfigure(3, weight=1)
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+
+    def create_main_area(self):
+        self.tabview = ctk.CTkTabview(self, command=self.on_tab_change)
+        self.tabview.grid(row=0, column=1, padx=20, pady=10, sticky="nsew")
+
+        self.chat_tab = self.tabview.add("Global Chat")
+        self.files_tab = self.tabview.add("Files")
+        self.audit_tab = self.tabview.add("Audit Logs")
+
+        # -- Chat Tab --
+        self.chat_tab.grid_columnconfigure(0, weight=1)
+        self.chat_tab.grid_rowconfigure(0, weight=1)
+
+        self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
+        self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self.chat_display.tag_config("search_info", foreground="#3B8ED0")
+
+        self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
+        self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        self.input_frame.grid_columnconfigure(0, weight=1)
+
+        self.msg_entry = ctk.CTkEntry(self.input_frame, placeholder_text="Type message...")
+        self.msg_entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        self.msg_entry.bind("<Return>", self.send_message)
+
+        # -- TTL Selector --
+        self.ttl_var = ctk.StringVar(value="Off")
+        ctk.CTkLabel(self.input_frame, text="Burn:").grid(row=0, column=1, padx=(10, 0))
+        self.ttl_menu = ctk.CTkOptionMenu(self.input_frame, values=["Off", "1m", "10m", "1h", "1d"], variable=self.ttl_var, width=80)
+        self.ttl_menu.grid(row=0, column=2, padx=5, pady=10)
+
+        self.send_btn = ctk.CTkButton(self.input_frame, text="Send", width=80, command=self.send_message)
+        self.send_btn.grid(row=0, column=3, padx=10, pady=10)
+
+        # -- Search Bar --
+        self.search_frame = ctk.CTkFrame(self.chat_tab)
+        self.search_frame.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
+        self.search_frame.grid_columnconfigure(0, weight=1)
+
+        self.search_entry = ctk.CTkEntry(self.search_frame, placeholder_text="Search messages...")
+        self.search_entry.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
+        self.search_entry.bind("<Return>", lambda e: self.load_chat_history())
+        self.search_entry.bind("<KeyRelease>", self.on_search_key)
+        self.search_entry.bind("<Escape>", lambda e: self.clear_search() or "break")
+
+        self.search_btn = ctk.CTkButton(self.search_frame, text="Search", width=80, command=self.load_chat_history)
+        self.search_btn.grid(row=0, column=1, padx=5, pady=5)
+
+        self.clear_search_btn = ctk.CTkButton(self.search_frame, text="X", width=30, fg_color="gray", command=self.clear_search)
+        self.clear_search_btn.grid(row=0, column=2, padx=5, pady=5)
+
+        # Context Menu for Message Actions
+        self.context_menu = Menu(self, tearoff=0)
+        self.context_menu.add_command(label="Copy", command=self.copy_message)
+        self.context_menu.add_command(label="Edit (Last Sent)", command=self.edit_last_message)
+        self.context_menu.add_command(label="Delete (Last Sent)", command=self.delete_last_message)
+
+        self.chat_display.bind("<Button-3>", self.show_context_menu)
+
+        # -- Files Tab --
+        self.files_tab.grid_columnconfigure(0, weight=1)
+        self.files_tab.grid_rowconfigure(2, weight=1)
+
+        self.file_controls = ctk.CTkFrame(self.files_tab)
+        self.file_controls.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+
+        self.share_btn = ctk.CTkButton(self.file_controls, text="Share File", command=self.share_file)
+        self.share_btn.pack(side="left", padx=5)
+
+        self.share_folder_btn = ctk.CTkButton(self.file_controls, text="Share Folder", command=self.share_folder)
+        self.share_folder_btn.pack(side="left", padx=5)
+
+        # File TTL
+        self.file_ttl_var = ctk.StringVar(value="Off")
+        self.file_ttl_dropdown = ctk.CTkOptionMenu(self.file_controls, values=["Off", "1m", "10m", "1h", "1d"], variable=self.file_ttl_var, width=80)
+        self.file_ttl_dropdown.pack(side="left", padx=5)
+        ctk.CTkLabel(self.file_controls, text="Burn:").pack(side="left", padx=(0, 5))
+
+        self.my_files_btn = ctk.CTkButton(self.file_controls, text="My Shared Files", command=self.show_my_files)
+        self.my_files_btn.pack(side="left", padx=5)
+
+        self.download_btn = ctk.CTkButton(self.file_controls, text="Download Selected", command=self.download_selected, fg_color="green", state="disabled")
+        self.download_btn.pack(side="right", padx=5)
+
+        self.file_source_frame = ctk.CTkFrame(self.files_tab, height=40)
+        self.file_source_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+
+        self.source_label = ctk.CTkLabel(self.file_source_frame, text="Viewing: Local Shared Files")
+        self.source_label.pack(side="left", padx=10)
+
+        self.refresh_files_btn = ctk.CTkButton(self.file_source_frame, text="Refresh", width=80, command=self.refresh_files_view)
+        self.refresh_files_btn.pack(side="right", padx=5)
+
+        self.select_all_btn = ctk.CTkButton(self.file_source_frame, text="Select All", width=80, command=self.select_all_files, state="disabled")
+        self.select_all_btn.pack(side="right", padx=5)
+
+        self.files_scroll = ctk.CTkScrollableFrame(self.files_tab, label_text="Files")
+        self.files_scroll.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+
+        # -- Progress UI --
+        self.progress_frame = ctk.CTkFrame(self.files_tab)
+        self.progress_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
+        self.progress_frame.grid_columnconfigure(0, weight=1)
+
+        self.progress_overall_lbl = ctk.CTkLabel(self.progress_frame, text="Overall Progress:", font=("Arial", 11))
+        self.progress_overall_lbl.grid(row=0, column=0, padx=5, sticky="w")
+        self.overall_progress = ctk.CTkProgressBar(self.progress_frame)
+        self.overall_progress.grid(row=1, column=0, padx=5, pady=(0, 5), sticky="ew")
+        self.overall_progress.set(0)
+
+        self.progress_file_lbl = ctk.CTkLabel(self.progress_frame, text="Current File: Idle", font=("Arial", 11))
+        self.progress_file_lbl.grid(row=2, column=0, padx=5, sticky="w")
+        self.file_progress = ctk.CTkProgressBar(self.progress_frame)
+        self.file_progress.grid(row=3, column=0, padx=5, pady=(0, 5), sticky="ew")
+        self.file_progress.set(0)
+
+        self.file_checkboxes = [] # (checkbox_widget, file_data)
+
+        # -- Audit Tab --
+        self.audit_tab.grid_columnconfigure(0, weight=1)
+        self.audit_tab.grid_rowconfigure(0, weight=1)
+
+        self.audit_display = ctk.CTkTextbox(self.audit_tab, state="disabled")
+        self.audit_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        self.audit_display._textbox.tag_config("alert", foreground="#e74c3c", font=ctk.CTkFont(weight="bold"))
+        self.audit_display._textbox.tag_config("warning", foreground="#e67e22", font=ctk.CTkFont(weight="bold"))
+        self.audit_display._textbox.tag_config("info", foreground="#2ecc71")
+        self.audit_display._textbox.tag_config("center", justify='center')
+
+        self.audit_controls = ctk.CTkFrame(self.audit_tab)
+        self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+
+        self.refresh_audit_btn = ctk.CTkButton(self.audit_controls, text="Refresh Logs", command=self.refresh_audit_view)
+        self.refresh_audit_btn.pack(pady=5)
+
+    def refresh_audit_view(self):
+        """Refreshes audit logs with non-blocking success feedback."""
+        self.load_audit_logs()
+        self.refresh_audit_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        def reset():
+            if self.refresh_audit_btn.winfo_exists():
+                self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(2000, reset)
+
+    def load_audit_logs(self):
+        if not self.winfo_exists() or self.tabview.get() != "Audit Logs":
+            return
+        logs = self.db.get_audit_logs(200)
+        self.audit_display.configure(state="normal")
+        self.audit_display.delete("1.0", "end")
+
+        if not logs:
+            self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+        else:
+            lines = []
+            for log in logs:
+                # log: (id, event_type, details, timestamp)
+                event_type = log[1]
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+                lines.append(f"[{ts}] {event_type}: {log[2]}")
+
+            if lines:
+                self.audit_display.insert("end", "\n".join(lines) + "\n")
+            else:
+                self.audit_display.insert("end", "\n\nNo audit logs found.", "center")
+
+        self.audit_display.configure(state="disabled")
+        self.audit_display.see("1.0")
+
+    def update_username(self, event=None):
+        new_name = self.username_entry.get().strip()
+        if new_name and new_name != self.username:
+            old_name = self.username
+            self.username = new_name
+            if hasattr(self, 'discovery'):
+                self.discovery.username = new_name
+            self.settings["username"] = new_name
+            save_settings(self.settings)
+            self.logger.log("SETTINGS_CHANGE", f"Username changed from {old_name} to {new_name}")
+
+            # Notify all connected peers of name change
+            for ip in self.peers:
+                self.executor.submit(self.network.send_hello, ip, self.username)
+
+            # Non-blocking success feedback
+            self.change_name_btn.configure(text="Saved", fg_color="#2ecc71")
+            self.after(2000, lambda: self.change_name_btn.configure(text="Set", fg_color=("#3B8ED0", "#1F6AA5")))
+
+
+    def show_trust_warning(self, ip):
+        if messagebox.askyesno("Security Warning", f"Fingerprint mismatch detected for {ip}!\nThis could be a Man-in-the-Middle attack or the user reinstalled the app.\n\nDo you want to trust this new identity?"):
+            self.db.update_peer_trust(ip, 'trusted')
+            self.peer_trust[ip] = 'trusted'
+            self.refresh_peers()
+
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, self.db, ip, name, self.refresh_peers)
+
+    def refresh_peers(self):
+        # Update peer trust levels from DB in batch
+        trust_levels = self.db.get_peer_trust_levels(list(self.peers.keys()))
+        for ip in self.peers:
+            self.peer_trust[ip] = trust_levels.get(ip, 'untrusted')
+
+        # Also include blocked status in snapshot for UI refreshes
+        all_perms = self.db.get_peers_permissions(list(self.peers.keys()))
+
+        # Prevent unnecessary UI rebuilds using snapshot comparison
+        current_snapshot = json.dumps({"peers": self.peers, "trust": self.peer_trust, "perms": all_perms}, sort_keys=True)
+        if current_snapshot == self._last_peers_snapshot:
+            self.after(2000, self.refresh_peers)
+            return
+
+        self._last_peers_snapshot = current_snapshot
+
+        for widget in self.peers_scroll.winfo_children():
+            widget.destroy()
+
+        if not self.peers:
+            lbl = ctk.CTkLabel(self.peers_scroll, text="No peers found yet...", font=("Arial", 11, "italic"), text_color="gray")
+            lbl.pack(pady=20)
+
+        for ip, name in self.peers.items():
+            perms = all_perms.get(ip, {})
+            is_blocked = perms.get('is_blocked', False)
+            is_verified = perms.get('is_verified', False)
+
+            row = ctk.CTkFrame(self.peers_scroll, fg_color="#333333" if is_blocked else None)
+            row.pack(fill="x", pady=2)
+
+            label_color = "gray" if is_blocked else None
+            label_text = f"{name}\n{ip}"
+            if is_blocked:
+                label_text += " (BLOCKED)"
+
+            lbl = ctk.CTkLabel(row, text=label_text, font=("Arial", 10), text_color=label_color)
+            lbl.pack(side="left", padx=5)
+
+            # Verification badge
+            if is_verified:
+                v_lbl = ctk.CTkLabel(row, text="✓", text_color="#2ecc71", font=("Arial", 12, "bold"), width=15)
+                v_lbl.pack(side="left", padx=2)
+
+            # Security button
+            btn_sec = ctk.CTkButton(row, text="Sec", width=35, height=20, fg_color="#555555",
+                              command=lambda i=ip, n=name: self.open_peer_security(i, n))
+            btn_sec.pack(side="right", padx=2)
+
+            btn_browse = ctk.CTkButton(row, text="Browse", width=60, height=20,
+                              command=lambda i=ip, n=name: self.browse_peer_files(i, n),
+                              state="disabled" if is_blocked else "normal")
+            btn_browse.pack(side="right", padx=5)
+
+            btn_chat = ctk.CTkButton(row, text="Chat", width=60, height=20,
+                              command=lambda i=ip, n=name: self.open_private_chat(i, n),
+                              state="disabled" if is_blocked else "normal")
+            btn_chat.pack(side="right", padx=2)
+
+            # Trust indicator
+            trust = self.peer_trust.get(ip, 'untrusted')
+            color = "gray"
+            if trust == 'trusted': color = "green"
+            elif trust == 'mismatch': color = "red"
+
+            trust_lbl = ctk.CTkLabel(row, text="●", text_color=color, width=10)
+            trust_lbl.pack(side="right", padx=5)
+            if trust == 'mismatch':
+                trust_lbl.bind("<Button-1>", lambda e, i=ip: self.show_trust_warning(i))
+        self.after(2000, self.refresh_peers)
+
+    def add_manual_peer(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Connect to IP")
+        dialog.geometry("300x280")
+        dialog.transient(self)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+
+        ip_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        ip_frame.pack(pady=10)
+
+        my_ip = socket.gethostbyname(socket.gethostname())
+        ctk.CTkLabel(ip_frame, text="My IP: " + my_ip).pack(side="left", padx=5)
+
+        def copy_ip():
+            self.clipboard_clear()
+            self.clipboard_append(my_ip)
+            copy_btn.configure(text="Copied!", fg_color="#2ecc71")
+
+            def reset():
+                if copy_btn.winfo_exists():
+                    copy_btn.configure(text="Copy", fg_color=("#3B8ED0", "#1F6AA5"))
+            self.after(2000, reset)
+
+        copy_btn = ctk.CTkButton(ip_frame, text="Copy", width=60, height=20, command=copy_ip)
+        copy_btn.pack(side="left", padx=5)
+
+        ctk.CTkLabel(dialog, text="Enter Peer IP:").pack(pady=5)
+        entry = ctk.CTkEntry(dialog, placeholder_text="192.168.x.x")
+        entry.pack(pady=5)
+
+        def connect(event=None):
+            ip = entry.get().strip()
+            if ip:
+                connect_btn.configure(text="Connecting...", state="disabled")
+                threading.Thread(target=self.try_manual_connect, args=(ip, dialog, connect_btn), daemon=True).start()
+
+        entry.bind("<Return>", connect)
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        connect_btn = ctk.CTkButton(dialog, text="Connect", command=connect)
+        connect_btn.pack(pady=20)
+        self.after(200, lambda: entry.focus_set() if entry.winfo_exists() else None)
+
+    def try_manual_connect(self, ip, dialog, btn):
+        success = self.network.send_hello(ip, self.username)
+        def update_ui():
+            if not btn.winfo_exists(): return
+            if success:
+                btn.configure(text="Handshake Sent!", fg_color="#2ecc71")
+                self.after(2000, lambda: dialog.destroy() if dialog.winfo_exists() else None)
+            else:
+                btn.configure(text="Failed", fg_color="#e74c3c", state="normal")
+                self.after(2000, lambda: btn.configure(text="Connect", fg_color=("#3B8ED0", "#1F6AA5")) if btn.winfo_exists() else None)
+        self.after(0, update_ui)
+
+    def on_tab_change(self):
+        tab = self.tabview.get()
+        if tab == "Global Chat":
+            self.msg_entry.focus_set()
+            self.load_chat_history(debounce=False)
+        elif tab == "Audit Logs":
+            self.load_audit_logs()
+        elif tab.startswith("Chat: "):
+            peer_ip = self.private_chat_tabs.get(tab)
+            if peer_ip:
+                self.current_private_peer = peer_ip
+                if peer_ip in self.private_entries:
+                    self.private_entries[peer_ip].focus_set()
+                self.load_private_chat(peer_ip, debounce=False)
+
+    def on_search_key(self, event):
+        # Throttle live search
+        if self._chat_history_after_id:
+            self.after_cancel(self._chat_history_after_id)

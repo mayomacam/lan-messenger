@@ -1,0 +1,89 @@
+        st_tabs = ctk.CTkTabview(dialog)
+        st_tabs.pack(fill="both", expand=True, padx=10, pady=10)
+
+        gen_tab = st_tabs.add("General")
+        sec_tab = st_tabs.add("Security")
+
+        # -- General Tab --
+        ctk.CTkLabel(gen_tab, text="Chat Port (TCP):").pack(pady=(10, 0))
+        entry_chat = ctk.CTkEntry(gen_tab)
+        entry_chat.insert(0, str(self.settings["tcp_chat_port"]))
+        entry_chat.pack(pady=5)
+
+        ctk.CTkLabel(gen_tab, text="File Port (TCP):").pack(pady=(10, 0))
+        entry_file = ctk.CTkEntry(gen_tab)
+        entry_file.insert(0, str(self.settings["tcp_file_port"]))
+        entry_file.pack(pady=5)
+
+        # -- Security Tab --
+        ctk.CTkLabel(sec_tab, text="Multi-Factor Authentication (MFA)", font=("Arial", 14, "bold")).pack(pady=10)
+
+        mfa_status = "Enabled" if self.db.get_config("mfa_enabled") == "1" else "Disabled"
+        status_lbl = ctk.CTkLabel(sec_tab, text=f"Status: {mfa_status}")
+        status_lbl.pack(pady=5)
+
+        def toggle_mfa():
+            if self.db.get_config("mfa_enabled") == "1":
+                # Disable MFA (needs confirmation/password)
+                if messagebox.askyesno("Disable MFA", "Are you sure you want to disable Multi-Factor Authentication?"):
+                    # Request master password for critical action
+                    pw_dialog = PasswordDialog(dialog, title="Verify Master Password")
+                    if pw_dialog.result:
+                        # Try to unlock with this password to verify
+                        temp_db_mgr = self.db.cipher # Just use existing cipher state
+                        # Since db is already unlocked, we can just check if password is correct by trying to re-unlock
+                        # or better, check against the master password provided at startup.
+                        if pw_dialog.result == self._master_password:
+                            self.db.set_config("mfa_enabled", "0")
+                            self.db.set_config("mfa_secret", None)
+                            self.logger.log("MFA_DISABLED", "TOTP Multi-Factor Authentication disabled.")
+                            status_lbl.configure(text="Status: Disabled")
+                            mfa_btn.configure(text="Enable MFA", fg_color=("#3B8ED0", "#1F6AA5"))
+                            messagebox.showinfo("Success", "MFA has been disabled.")
+                        else:
+                            messagebox.showerror("Error", "Incorrect Master Password.")
+            else:
+                # Enable MFA
+                MFASetupDialog(dialog, self.db, on_complete_cb=lambda: [
+                    status_lbl.configure(text="Status: Enabled"),
+                    mfa_btn.configure(text="Disable MFA", fg_color="#e74c3c")
+                ])
+
+        mfa_btn_text = "Disable MFA" if mfa_status == "Enabled" else "Enable MFA"
+        mfa_btn_color = "#e74c3c" if mfa_status == "Enabled" else ("#3B8ED0", "#1F6AA5")
+        mfa_btn = ctk.CTkButton(sec_tab, text=mfa_btn_text, fg_color=mfa_btn_color, command=toggle_mfa)
+        mfa_btn.pack(pady=20)
+
+        def save(event=None):
+            try:
+                self.settings["tcp_chat_port"] = int(entry_chat.get())
+                self.settings["tcp_file_port"] = int(entry_file.get())
+                self.settings["username"] = self.username
+                save_settings(self.settings)
+                save_btn.configure(text="Saved! Please Restart App", fg_color="#2ecc71")
+                self.after(2000, dialog.destroy)
+            except ValueError:
+                messagebox.showerror("Error", "Ports must be numbers.")
+
+        entry_chat.bind("<Return>", save)
+        entry_file.bind("<Return>", save)
+        save_btn = ctk.CTkButton(gen_tab, text="Save & Restart", command=save, fg_color="green")
+        save_btn.pack(pady=20)
+        self.after(200, lambda: entry_chat.focus_set())
+
+    def on_closing(self):
+        if hasattr(self, 'discovery'):
+            self.discovery.stop()
+        if hasattr(self, 'network'):
+            self.network.close()
+        if hasattr(self, 'file_manager'):
+            self.file_manager.close()
+        if hasattr(self, 'db'):
+            self.db.close()
+        self.executor.shutdown(wait=False)
+        self.destroy()
+
+if __name__ == "__main__":
+    app = LANMessengerApp()
+    app.protocol("WM_DELETE_WINDOW", app.on_closing)
+    app.mainloop()

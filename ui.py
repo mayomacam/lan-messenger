@@ -9,6 +9,9 @@ import shutil
 import json
 import audit
 import ssl_utils
+import pyotp
+import qrcode
+from PIL import Image, ImageTk
 from concurrent.futures import ThreadPoolExecutor
 from db import Database
 from network import NetworkManager, DiscoveryManager
@@ -47,34 +50,6 @@ class MasterPasswordDialog(ctk.CTkToplevel):
 
     def on_cancel(self):
         self.master.destroy()
-
-class LockScreen(ctk.CTkFrame):
-    def __init__(self, parent, unlock_callback):
-        super().__init__(parent, fg_color=("#DBDBDB", "#2B2B2B"))
-        self.unlock_callback = unlock_callback
-        self.place(relx=0, rely=0, relwidth=1, relheight=1)
-
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure((0, 4), weight=1)
-
-        ctk.CTkLabel(self, text="Application Locked", font=ctk.CTkFont(size=30, weight="bold")).grid(row=1, column=0, pady=20)
-
-        self.pass_entry = ctk.CTkEntry(self, placeholder_text="Master Password", show="*", width=300)
-        self.pass_entry.grid(row=2, column=0, pady=10)
-        self.pass_entry.bind("<Return>", self.on_unlock)
-
-        self.unlock_btn = ctk.CTkButton(self, text="Unlock App", command=self.on_unlock)
-        self.unlock_btn.grid(row=3, column=0, pady=20)
-
-        self.pass_entry.focus_set()
-
-    def on_unlock(self, event=None):
-        password = self.pass_entry.get()
-        if self.unlock_callback(password):
-            self.destroy()
-        else:
-            self.pass_entry.delete(0, "end")
-            messagebox.showerror("Error", "Invalid Password")
 
 class PeerSecurityDialog(ctk.CTkToplevel):
     def __init__(self, parent, db, peer_ip, peer_name, on_update_cb=None):
@@ -165,6 +140,69 @@ class PeerSecurityDialog(ctk.CTkToplevel):
             self.master.refresh_peers()
         self.destroy()
 
+class MFASetupDialog(ctk.CTkToplevel):
+    def __init__(self, parent, db, on_complete_cb=None):
+        super().__init__(parent)
+        self.title("MFA Setup")
+        self.geometry("450x650")
+        self.db = db
+        self.on_complete_cb = on_complete_cb
+        self.secret = pyotp.random_base32()
+        self.logger = audit.get_logger()
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(self, text="Multi-Factor Authentication Setup", font=("Arial", 20, "bold")).grid(row=0, column=0, pady=20)
+        ctk.CTkLabel(self, text="1. Scan the QR code with your Authenticator app", font=("Arial", 12)).grid(row=1, column=0, pady=10)
+
+        # Generate QR Code
+        totp_uri = pyotp.totp.TOTP(self.secret).provisioning_uri(name="User", issuer_name="LAN Messenger")
+        qr = qrcode.QRCode(version=1, box_size=5, border=2)
+        qr.add_data(totp_uri)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+
+        # Convert to PhotoImage
+        self.qr_photo = ImageTk.PhotoImage(qr_img)
+        self.qr_label = ctk.CTkLabel(self, image=self.qr_photo, text="")
+        self.qr_label.grid(row=2, column=0, pady=10)
+
+        ctk.CTkLabel(self, text=f"Secret Key: {self.secret}", font=("Courier", 12)).grid(row=3, column=0, pady=5)
+
+        ctk.CTkLabel(self, text="2. Enter the 6-digit code to verify", font=("Arial", 12)).grid(row=4, column=0, pady=(20, 5))
+        self.verify_entry = ctk.CTkEntry(self, placeholder_text="000000", width=150)
+        self.verify_entry.grid(row=5, column=0, pady=5)
+        self.verify_entry.bind("<Return>", lambda e: self.verify_and_save())
+
+        self.status_label = ctk.CTkLabel(self, text="")
+        self.status_label.grid(row=6, column=0, pady=5)
+
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_frame.grid(row=7, column=0, pady=20)
+
+        ctk.CTkButton(self.btn_frame, text="Cancel", fg_color="gray", command=self.destroy).pack(side="left", padx=10)
+        self.save_btn = ctk.CTkButton(self.btn_frame, text="Verify & Enable", command=self.verify_and_save)
+        self.save_btn.pack(side="left", padx=10)
+
+        self.transient(parent)
+        self.grab_set()
+
+    def verify_and_save(self):
+        code = self.verify_entry.get().strip()
+        totp = pyotp.TOTP(self.secret)
+        if totp.verify(code):
+            self.db.set_config("mfa_secret", self.secret, encrypt=True)
+            self.db.set_config("mfa_enabled", "1")
+            if self.logger:
+                self.logger.log("MFA_ENABLED", "TOTP Multi-Factor Authentication enabled.")
+            messagebox.showinfo("Success", "MFA has been successfully enabled!")
+            if self.on_complete_cb:
+                self.on_complete_cb()
+            self.destroy()
+        else:
+            self.status_label.configure(text="Invalid code. Please try again.", text_color="red")
+            self.verify_entry.delete(0, "end")
+
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
@@ -201,49 +239,6 @@ class PasswordDialog(ctk.CTkToplevel):
         self.destroy()
 
 class LockScreen(ctk.CTkFrame):
-    def __init__(self, parent, password_callback):
-        super().__init__(parent, fg_color="#1a1a1a")
-        self.password_callback = password_callback
-
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure((0, 4), weight=1)
-
-        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
-
-        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
-        self.entry.grid(row=2, column=0, pady=10)
-        self.entry.bind("<Return>", self.on_unlock)
-
-        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
-        self.unlock_btn.grid(row=3, column=0, pady=20)
-
-        self.entry.focus_set()
-
-        self.configure(fg_color="#1a1a1a")
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure((0, 4), weight=1)
-
-        ctk.CTkLabel(self, text="LAN Messenger Locked", font=("Arial", 24, "bold")).grid(row=1, column=0, pady=40)
-
-        self.entry = ctk.CTkEntry(self, show="*", width=300, height=40, placeholder_text="Master Password")
-        self.entry.grid(row=2, column=0, pady=10)
-        self.entry.bind("<Return>", self.on_unlock)
-
-        self.unlock_btn = ctk.CTkButton(self, text="Unlock", width=150, height=40, command=self.on_unlock)
-        self.unlock_btn.grid(row=3, column=0, pady=20)
-
-        self.entry.focus_set()
-        self.grab_set()
-
-    def on_unlock(self, event=None):
-        pw = self.entry.get()
-        if self.password_callback(pw):
-            self.destroy()
-        else:
-            self.entry.delete(0, "end")
-            self.entry.configure(placeholder_text="Invalid Password!", placeholder_text_color="red")
-
-class LockScreen(ctk.CTkFrame):
     def __init__(self, parent, db, on_unlock):
         super().__init__(parent, fg_color=parent._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"]))
         self.db = db
@@ -267,6 +262,13 @@ class LockScreen(ctk.CTkFrame):
         self.password_entry.pack(pady=10, padx=40)
         self.password_entry.bind("<Return>", lambda e: self.attempt_unlock())
 
+        # MFA Entry (Initially hidden)
+        self.mfa_entry = ctk.CTkEntry(inner_frame, width=250, placeholder_text="TOTP Code (6-digits)")
+        self.mfa_enabled = self.db.get_config("mfa_enabled") == "1"
+        if self.mfa_enabled:
+            self.mfa_entry.pack(pady=10, padx=40)
+            self.mfa_entry.bind("<Return>", lambda e: self.attempt_unlock())
+
         self.btn = ctk.CTkButton(inner_frame, text="Unlock", command=self.attempt_unlock)
         self.btn.pack(pady=20)
 
@@ -289,9 +291,32 @@ class LockScreen(ctk.CTkFrame):
             self.destroy()
         else:
             if self.db.unlock(password):
-                audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked.")
-                self.on_unlock()
-                self.destroy()
+                # Check MFA if enabled
+                if self.mfa_enabled:
+                    mfa_code = self.mfa_entry.get().strip()
+                    mfa_secret = self.db.get_config("mfa_secret", decrypt=True)
+                    if not mfa_secret:
+                        # Fallback if secret is missing but enabled
+                        audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked (MFA Secret Missing).")
+                        self.on_unlock()
+                        self.destroy()
+                        return
+
+                    totp = pyotp.TOTP(mfa_secret)
+                    if totp.verify(mfa_code):
+                        audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked with MFA.")
+                        self.on_unlock()
+                        self.destroy()
+                    else:
+                        audit.get_logger().log("MFA_VERIFY_FAILURE", "Failed MFA verification attempt.")
+                        self.info_label.configure(text="Invalid TOTP Code! Try again.", text_color="red")
+                        self.mfa_entry.delete(0, "end")
+                        # Re-lock the DB because password was correct but MFA failed
+                        self.db.lock_db()
+                else:
+                    audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked.")
+                    self.on_unlock()
+                    self.destroy()
             else:
                 audit.get_logger().log("INVALID_PASSWORD_ATTEMPT", "Failed unlock attempt.")
                 self.info_label.configure(text="Invalid Password! Try again.", text_color="red")
@@ -1398,18 +1423,65 @@ class LANMessengerApp(ctk.CTk):
     def open_settings(self):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Settings")
-        dialog.geometry("400x320")
+        dialog.geometry("500x550")
         dialog.transient(self)
 
-        ctk.CTkLabel(dialog, text="Chat Port (TCP):").pack(pady=(10, 0))
-        entry_chat = ctk.CTkEntry(dialog)
+        # Tabview for settings
+        st_tabs = ctk.CTkTabview(dialog)
+        st_tabs.pack(fill="both", expand=True, padx=10, pady=10)
+
+        gen_tab = st_tabs.add("General")
+        sec_tab = st_tabs.add("Security")
+
+        # -- General Tab --
+        ctk.CTkLabel(gen_tab, text="Chat Port (TCP):").pack(pady=(10, 0))
+        entry_chat = ctk.CTkEntry(gen_tab)
         entry_chat.insert(0, str(self.settings["tcp_chat_port"]))
         entry_chat.pack(pady=5)
 
-        ctk.CTkLabel(dialog, text="File Port (TCP):").pack(pady=(10, 0))
-        entry_file = ctk.CTkEntry(dialog)
+        ctk.CTkLabel(gen_tab, text="File Port (TCP):").pack(pady=(10, 0))
+        entry_file = ctk.CTkEntry(gen_tab)
         entry_file.insert(0, str(self.settings["tcp_file_port"]))
         entry_file.pack(pady=5)
+
+        # -- Security Tab --
+        ctk.CTkLabel(sec_tab, text="Multi-Factor Authentication (MFA)", font=("Arial", 14, "bold")).pack(pady=10)
+
+        mfa_status = "Enabled" if self.db.get_config("mfa_enabled") == "1" else "Disabled"
+        status_lbl = ctk.CTkLabel(sec_tab, text=f"Status: {mfa_status}")
+        status_lbl.pack(pady=5)
+
+        def toggle_mfa():
+            if self.db.get_config("mfa_enabled") == "1":
+                # Disable MFA (needs confirmation/password)
+                if messagebox.askyesno("Disable MFA", "Are you sure you want to disable Multi-Factor Authentication?"):
+                    # Request master password for critical action
+                    pw_dialog = PasswordDialog(dialog, title="Verify Master Password")
+                    if pw_dialog.result:
+                        # Try to unlock with this password to verify
+                        temp_db_mgr = self.db.cipher # Just use existing cipher state
+                        # Since db is already unlocked, we can just check if password is correct by trying to re-unlock
+                        # or better, check against the master password provided at startup.
+                        if pw_dialog.result == self._master_password:
+                            self.db.set_config("mfa_enabled", "0")
+                            self.db.set_config("mfa_secret", None)
+                            self.logger.log("MFA_DISABLED", "TOTP Multi-Factor Authentication disabled.")
+                            status_lbl.configure(text="Status: Disabled")
+                            mfa_btn.configure(text="Enable MFA", fg_color=("#3B8ED0", "#1F6AA5"))
+                            messagebox.showinfo("Success", "MFA has been disabled.")
+                        else:
+                            messagebox.showerror("Error", "Incorrect Master Password.")
+            else:
+                # Enable MFA
+                MFASetupDialog(dialog, self.db, on_complete_cb=lambda: [
+                    status_lbl.configure(text="Status: Enabled"),
+                    mfa_btn.configure(text="Disable MFA", fg_color="#e74c3c")
+                ])
+
+        mfa_btn_text = "Disable MFA" if mfa_status == "Enabled" else "Enable MFA"
+        mfa_btn_color = "#e74c3c" if mfa_status == "Enabled" else ("#3B8ED0", "#1F6AA5")
+        mfa_btn = ctk.CTkButton(sec_tab, text=mfa_btn_text, fg_color=mfa_btn_color, command=toggle_mfa)
+        mfa_btn.pack(pady=20)
 
         def save(event=None):
             try:
@@ -1424,7 +1496,7 @@ class LANMessengerApp(ctk.CTk):
 
         entry_chat.bind("<Return>", save)
         entry_file.bind("<Return>", save)
-        save_btn = ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green")
+        save_btn = ctk.CTkButton(gen_tab, text="Save & Restart", command=save, fg_color="green")
         save_btn.pack(pady=20)
         self.after(200, lambda: entry_chat.focus_set())
 

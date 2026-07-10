@@ -1,0 +1,500 @@
+        self._chat_history_after_id = self.after(300, self.load_chat_history)
+
+    def clear_search(self):
+        if self._chat_history_after_id:
+            try:
+                self.after_cancel(self._chat_history_after_id)
+            except Exception:
+                pass
+            self._chat_history_after_id = None
+        self.search_entry.delete(0, "end")
+        self.load_chat_history(debounce=False)
+        self.search_entry.focus_set()
+
+    def focus_search(self, event=None):
+        self.tabview.set("Global Chat")
+        self.search_entry.focus_set()
+
+    def load_chat_history(self, debounce=True):
+        """Debounced global chat refresh with lazy loading."""
+        if not self.winfo_exists():
+            return
+
+        if debounce:
+            if self._chat_history_after_id:
+                try:
+                    self.after_cancel(self._chat_history_after_id)
+                except Exception:
+                    pass
+            self._chat_history_after_id = self.after(100, lambda: self.load_chat_history(debounce=False))
+            return
+
+        self._chat_history_after_id = None
+
+        # Lazy loading: only update if Global Chat is visible
+        if self.tabview.get() != "Global Chat":
+            return
+
+        query = self.search_entry.get().strip().lower()
+        self._last_search_query = query
+
+        messages = self.db.get_messages(200)
+        self.chat_display.configure(state="normal")
+        self.chat_display.delete("1.0", "end")
+
+        lines = []
+        for msg in messages:
+            sender = msg[1]
+            content = msg[2]
+
+            # Decrypted search
+            if query and query not in content.lower() and query not in sender.lower():
+                continue
+
+            ts = time.strftime('%H:%M', time.localtime(msg[3]))
+            lines.append(f"[{ts}] {sender}: {content}")
+
+        if query:
+            if lines:
+                self.chat_display.insert("end", f"--- Found {len(lines)} results for '{query}' ---\n\n", "search_info")
+            else:
+                self.chat_display.insert("end", f"--- No results found for '{query}' ---\n", "search_info")
+
+        if lines:
+            self.chat_display.insert("end", "\n".join(lines) + "\n")
+        elif query:
+            self.chat_display.insert("end", f"\n\nNo messages found matching '{query}'", "center")
+        elif not messages:
+            self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
+
+        self.chat_display.configure(state="disabled")
+        self.chat_display.see("end")
+
+    def _get_ttl_seconds(self, var=None):
+        val = var.get() if var else self.ttl_var.get()
+        if val == "1m": return 60
+        if val == "10m": return 600
+        if val == "1h": return 3600
+        if val == "1d": return 86400
+        return None
+
+    def send_message(self, event=None):
+        msg = self.msg_entry.get()
+        if not msg: return
+        ttl = self._get_ttl_seconds()
+
+        # If we are in a private chat tab, send private message
+        current_tab = self.tabview.get()
+        if current_tab.startswith("Chat: "):
+            peer_ip = self.current_private_peer
+            if peer_ip:
+                msg_id = self.db.add_message(self.username, msg, recipient=peer_ip, ttl=ttl)
+                threading.Thread(target=self.network.send_message, args=(peer_ip, self.username, msg, msg_id, True, ttl)).start()
+                self.msg_entry.delete(0, "end")
+                self.load_private_chat(peer_ip)
+                return
+
+        # Otherwise send global message
+        msg_id = self.db.add_message(self.username, msg, ttl=ttl)
+        for ip in self.peers:
+            self.executor.submit(self.network.send_message, ip, self.username, msg, msg_id, False, ttl)
+
+        self.msg_entry.delete(0, "end")
+        self.load_chat_history()
+
+    def open_security_dialog(self, ip, name):
+        def on_update():
+            self._last_peers_snapshot = ""
+            self.refresh_peers()
+        PeerSecurityDialog(self, self.db, ip, name, on_update)
+
+    def open_private_chat(self, ip, name):
+        # Find if we already have a tab for this IP
+        tab_name = None
+        for tname, tip in self.private_chat_tabs.items():
+            if tip == ip:
+                tab_name = tname
+                break
+
+        if not tab_name:
+            tab_name = f"Chat: {name}"
+            # Handle name collisions
+            if tab_name in self.tabview._tab_dict.keys():
+                tab_name = f"Chat: {name} ({ip})"
+
+            self.tabview.add(tab_name)
+            # Create UI for the new tab
+            tab_frame = self.tabview.tab(tab_name)
+            tab_frame.grid_columnconfigure(0, weight=1)
+            tab_frame.grid_rowconfigure(0, weight=1)
+
+            display = ctk.CTkTextbox(tab_frame, state="disabled")
+            display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+            input_frame = ctk.CTkFrame(tab_frame, height=50)
+            input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+            input_frame.grid_columnconfigure(0, weight=1)
+
+            entry = ctk.CTkEntry(input_frame, placeholder_text=f"Message {name}...")
+            entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+
+            # Private TTL
+            priv_ttl_var = ctk.StringVar(value=self.ttl_var.get())
+            ctk.CTkLabel(input_frame, text="Burn:").grid(row=0, column=1, padx=(10, 0))
+            priv_ttl_dropdown = ctk.CTkOptionMenu(input_frame, values=["Off", "1m", "10m", "1h", "1d"], variable=priv_ttl_var, width=80)
+            priv_ttl_dropdown.grid(row=0, column=2, padx=5, pady=10)
+
+            def send_priv(e=None, i=ip, ent=entry, tvar=priv_ttl_var):
+                m = ent.get()
+                if not m: return
+
+                # Get TTL
+                ttl_sec = self._get_ttl_seconds(var=tvar)
+
+                mid = self.db.add_message(self.username, m, recipient=i, ttl=ttl_sec)
+                threading.Thread(target=self.network.send_message, args=(i, self.username, m, mid, True, ttl_sec)).start()
+                ent.delete(0, "end")
+                self.load_private_chat(i)
+
+            entry.bind("<Return>", send_priv)
+            btn = ctk.CTkButton(input_frame, text="Send", width=80, command=send_priv)
+            btn.grid(row=0, column=3, padx=10, pady=10)
+
+            self.private_chats[ip] = display
+            self.private_entries[ip] = entry
+            self.private_chat_tabs[tab_name] = ip
+
+        self.current_private_peer = ip
+        self.tabview.set(tab_name)
+        self.load_private_chat(ip)
+
+    def load_private_chat(self, peer_ip, debounce=True):
+        """Debounced private chat refresh with batched insertions and lazy loading."""
+        if not self.winfo_exists():
+            return
+
+        # Lazy loading: only update if this peer's tab is currently visible
+        current_tab = self.tabview.get()
+        if self.private_chat_tabs.get(current_tab) != peer_ip:
+            return
+
+        if debounce:
+            if peer_ip in self._private_chat_after_ids:
+                try:
+                    self.after_cancel(self._private_chat_after_ids[peer_ip])
+                except Exception:
+                    pass
+            self._private_chat_after_ids[peer_ip] = self.after(100, lambda: self.load_private_chat(peer_ip, debounce=False))
+            return
+
+        self._private_chat_after_ids.pop(peer_ip, None)
+        messages = self.db.get_messages(100, peer_ip=peer_ip)
+        display = self.private_chats[peer_ip]
+        display.configure(state="normal")
+        display.delete("1.0", "end")
+
+        lines = []
+        for msg in messages:
+            sender = msg[1]
+            content = msg[2]
+            ts = time.strftime('%H:%M', time.localtime(msg[3]))
+            lines.append(f"[{ts}] {sender}: {content}")
+
+        if lines:
+            display.insert("end", "\n".join(lines) + "\n")
+
+        display.configure(state="disabled")
+        display.see("end")
+
+    def show_context_menu(self, event):
+        self.context_menu.tk_popup(event.x_root, event.y_root)
+
+    def copy_message(self):
+        try:
+            text = self.chat_display.selection_get()
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        except Exception:
+            pass
+
+    def edit_last_message(self):
+        msgs = self.db.get_messages(100)
+        my_msgs = [m for m in msgs if m[1] == self.username]
+        if not my_msgs:
+            messagebox.showinfo("Info", "No messages to edit.")
+            return
+        last_msg = my_msgs[0]
+        msg_id, content = last_msg[0], last_msg[2]
+
+        dialog = ctk.CTkInputDialog(text="Edit your last message:", title="Edit Message")
+        new_content = dialog.get_input()
+        if new_content:
+            self.db.edit_message(msg_id, new_content)
+            for ip in self.peers:
+                self.executor.submit(self.network.send_edit, ip, msg_id, new_content)
+            self.load_chat_history()
+
+    def delete_last_message(self):
+        msgs = self.db.get_messages(100)
+        my_msgs = [m for m in msgs if m[1] == self.username]
+        if not my_msgs: return
+        last_msg = my_msgs[0]
+        msg_id, content = last_msg[0], last_msg[2]
+        if messagebox.askyesno("Delete", "Delete this message?"):
+            self.db.delete_message(msg_id)
+            for ip in self.peers:
+                self.executor.submit(self.network.send_delete, ip, msg_id)
+            self.load_chat_history()
+
+    def share_file(self):
+        path = filedialog.askopenfilename()
+        if path:
+            filename = os.path.basename(path)
+            size = os.path.getsize(path)
+            checksum = FileTransferManager.calculate_sha256(path)
+            local_ip = socket.gethostbyname(socket.gethostname())
+            ttl = self._get_ttl_seconds(var=self.file_ttl_var)
+            self.db.add_file(filename, path, size, local_ip, is_folder=False, checksum=checksum, ttl=ttl)
+            self.current_file_view_source = "Local"
+            self.source_label.configure(text="Viewing: Local Shared Files")
+            self.refresh_files_view()
+
+            # Visual feedback
+            self.share_btn.configure(text="Shared!", fg_color="#2ecc71")
+            def reset_share_btn():
+                if self.share_btn.winfo_exists():
+                    self.share_btn.configure(text="Share File", fg_color=("#3B8ED0", "#1F6AA5"))
+            self.after(2000, reset_share_btn)
+
+    def get_folder_size(self, path):
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                if not os.path.islink(fp):
+                    total_size += os.path.getsize(fp)
+        return total_size
+
+    def share_folder(self):
+        path = filedialog.askdirectory()
+        if path:
+            dirname = os.path.basename(path)
+            size = self.get_folder_size(path)
+            local_ip = socket.gethostbyname(socket.gethostname())
+            ttl = self._get_ttl_seconds(var=self.file_ttl_var)
+            self.db.add_file(dirname, path, size, local_ip, is_folder=True, ttl=ttl)
+            self.current_file_view_source = "Local"
+            self.source_label.configure(text="Viewing: Local Shared Files")
+            self.refresh_files_view()
+
+            # Visual feedback
+            self.share_folder_btn.configure(text="Shared!", fg_color="#2ecc71")
+            def reset_share_folder_btn():
+                if self.share_folder_btn.winfo_exists():
+                    self.share_folder_btn.configure(text="Share Folder", fg_color=("#3B8ED0", "#1F6AA5"))
+            self.after(2000, reset_share_folder_btn)
+
+    def show_my_files(self):
+        self.current_file_view_source = "Local"
+        self.source_label.configure(text="Viewing: Local Shared Files")
+        self.select_all_btn.configure(state="disabled")
+        self.refresh_files_view()
+
+    def select_all_files(self):
+        for chk_var, _ in self.file_checkboxes:
+            chk_var.set(1)
+
+    def browse_peer_files(self, ip, name):
+        self.current_file_view_source = ip
+        self.source_label.configure(text=f"Viewing: {name}'s Files")
+        self.select_all_btn.configure(state="normal")
+        self.tabview.set("Files")
+        self.refresh_files_view()
+
+    def refresh_files_view(self):
+        # Non-blocking success feedback
+        self.refresh_files_btn.configure(text="Refreshed", fg_color="#2ecc71")
+        def reset():
+            if self.refresh_files_btn.winfo_exists():
+                self.refresh_files_btn.configure(text="Refresh", fg_color=("#3B8ED0", "#1F6AA5"))
+        self.after(1500, reset)
+
+        self.file_checkboxes = []
+        for w in self.files_scroll.winfo_children():
+            w.destroy()
+        if self.current_file_view_source == "Local":
+            self.download_btn.configure(state="disabled")
+            self.select_all_btn.configure(state="disabled")
+            files = self.db.get_files()
+            file_data = []
+            for f in files:
+                # f can be dict (from peer) or tuple (from local db)
+                if isinstance(f, tuple):
+                     file_data.append({
+                        'filename': f[1],
+                        'path': f[2],
+                        'size': f[3],
+                        'is_folder': f[5],
+                        'owner': "Me",
+                        'checksum': f[6] if len(f) > 6 else None
+                    })
+                else:
+                     file_data.append(f)
+            self.render_file_list(file_data)
+        else:
+            self.download_btn.configure(state="normal")
+            threading.Thread(target=self.fetch_peer_files, args=(self.current_file_view_source,)).start()
+
+    def fetch_peer_files(self, ip):
+        file_list = self.file_manager.get_shared_files(ip)
+        if not file_list and self.current_file_view_source == ip:
+             self.after(0, lambda: messagebox.showerror("Error", f"Could not fetch file list from {ip}"))
+
+        if self.current_file_view_source == ip:
+            self.after(0, lambda: self.render_file_list(file_list))
+
+    def render_file_list(self, files):
+        for w in self.files_scroll.winfo_children():
+            w.destroy()
+        self.file_checkboxes = []
+
+        if not files:
+            msg = "No files shared yet..." if self.current_file_view_source == "Local" else "No files found on this peer."
+            lbl = ctk.CTkLabel(self.files_scroll, text=msg, font=("Arial", 12, "italic"), text_color="gray")
+            lbl.pack(pady=40)
+
+        now = time.time()
+        for f in files:
+            # Normalize to dict
+            if isinstance(f, tuple):
+                f = {
+                    'id': f[0],
+                    'filename': f[1],
+                    'path': f[2],
+                    'size': f[3],
+                    'owner': f[4],
+                    'is_folder': f[5],
+                    'checksum': f[6],
+                    'expires_at': f[7] if len(f) > 7 else None
+                }
+
+            row = ctk.CTkFrame(self.files_scroll)
+            row.pack(fill="x", pady=2)
+            chk_var = ctk.IntVar()
+
+            # Label with expiration info
+            label_text = f"[{'DIR' if f.get('is_folder') else 'FILE'}] {f['filename']}"
+            expires_at = f.get('expires_at')
+            if expires_at:
+                remaining = expires_at - now
+                if remaining > 0:
+                    if remaining > 3600:
+                        time_str = f"{remaining/3600:.1f}h"
+                    elif remaining > 60:
+                        time_str = f"{remaining/60:.1f}m"
+                    else:
+                        time_str = f"{int(remaining)}s"
+                    label_text += f" (Exp: {time_str})"
+                else:
+                    label_text += " (Expired)"
+
+            chk = ctk.CTkCheckBox(row, text=label_text, variable=chk_var)
+            chk.pack(side="left", padx=5)
+
+            size_mb = f['size'] / (1024*1024)
+            info = ctk.CTkLabel(row, text=f"{size_mb:.2f} MB")
+            info.pack(side="right", padx=10)
+            self.file_checkboxes.append((chk_var, f))
+
+    def download_selected(self):
+        if self.current_file_view_source == "Local": return
+        target_ip = self.current_file_view_source
+
+        items = [(var, f) for var, f in self.file_checkboxes if var.get() == 1]
+        if not items: return
+
+        def worker():
+            self.after(0, lambda: self.overall_progress.set(0))
+            self.after(0, lambda: self.file_progress.set(0))
+
+            for var, f in items:
+                if f.get('is_folder'):
+                    self.file_manager.download_folder(target_ip, f['path'], progress_callback=self._download_progress)
+                else:
+                    self.file_manager.download_file(target_ip, f['path'], expected_checksum=f.get('checksum'))
+                    self.after(0, lambda p=f['filename']: self.progress_file_lbl.configure(text=f"Downloaded {p}"))
+
+            def reset():
+                if self.download_btn.winfo_exists():
+                    self.download_btn.configure(text="Finished!", fg_color="#2ecc71")
+                    self.after(3000, lambda: self.download_btn.configure(text="Download Selected", fg_color="green") if self.download_btn.winfo_exists() else None)
+            self.after(0, reset)
+            self.after(0, lambda: self.progress_file_lbl.configure(text="Idle"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _download_progress(self, rel_path, status, file_ratio, overall_ratio):
+        def update():
+            if status == "START":
+                self.progress_file_lbl.configure(text=f"Downloading: {rel_path}")
+                self.file_progress.set(0)
+            elif status == "PROGRESS":
+                self.file_progress.set(file_ratio)
+            elif status in ("DONE", "ERROR"):
+                self.file_progress.set(1.0 if status == "DONE" else 0)
+                self.progress_file_lbl.configure(text=f"{'Finished' if status=='DONE' else 'Failed'}: {rel_path}")
+
+            self.overall_progress.set(overall_ratio)
+
+        if self.winfo_exists():
+            self.after(0, update)
+
+    def start_download(self, ip, path, is_folder):
+        if is_folder:
+            self.file_manager.download_folder(ip, path)
+        else:
+            self.file_manager.download_file(ip, path)
+
+    def open_peer_security(self, ip, name):
+        PeerSecurityDialog(self, self.db, ip, name, self.logger)
+
+    def check_lock(self):
+        if self.db.is_locked():
+            if not self.lock_screen:
+                self.lock_screen = LockScreen(self, self.db, self.after_unlock)
+        else:
+            if self.lock_screen:
+                self.lock_screen.destroy()
+                self.lock_screen = None
+
+    def after_unlock(self):
+        self.lock_screen = None
+        self.load_chat_history()
+        self.refresh_peers()
+        self._reset_lock_timer()
+
+    def lock_app(self):
+        if not self.db.is_locked():
+            self.db.lock_db()
+            self.logger.log("APP_LOCKED", "Application manually locked.")
+            self.check_lock()
+
+    def _reset_lock_timer(self, event=None):
+        if self._lock_timer_id:
+            self.after_cancel(self._lock_timer_id)
+        if not self.db.is_locked():
+            self._lock_timer_id = self.after(self._inactivity_timeout, self._on_inactivity)
+
+    def _on_inactivity(self):
+        if not self.db.is_locked():
+            self.db.lock_db()
+            self.logger.log("APP_LOCKED", "Application locked due to inactivity.")
+            self.check_lock()
+
+    def open_settings(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Settings")
+        dialog.geometry("500x550")
+        dialog.transient(self)
+
+        # Tabview for settings
