@@ -12,12 +12,19 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 
 class EncryptionManager:
-    def __init__(self, key_file=".master.key", password=None):
-        self.key_file = key_file
+    def __init__(self, key_file=None, password=None):
+        self.key_file = key_file or ".master.key"
         self.key = None
         self.aesgcm = None
         if password:
             self.unlock(password)
+
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
+
+    def lock(self):
+        self.key = None
+        self.aesgcm = None
 
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         kdf = PBKDF2HMAC(
@@ -28,6 +35,19 @@ class EncryptionManager:
             backend=default_backend()
         )
         return kdf.derive(password.encode())
+
+    def lock(self):
+        self.aesgcm = None
+        self.key = None
+        self.decrypt.cache_clear()
+
+    def needs_setup(self) -> bool:
+        return not os.path.exists(self.key_file)
+
+    def setup(self, password: str):
+        if os.path.exists(self.key_file):
+            raise RuntimeError("Key already exists. Use unlock.")
+        self.unlock(password)
 
     def unlock(self, password: str):
         """Unlocks the master key using the provided password."""
@@ -61,6 +81,16 @@ class EncryptionManager:
 
         self.aesgcm = AESGCM(self.key)
 
+    def lock(self):
+        self.key = None
+        self.aesgcm = None
+
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
+
+    def needs_setup(self) -> bool:
+        return not os.path.exists(self.key_file)
+
     def _save_encrypted_key(self, password: str, key: bytes):
         salt = os.urandom(16)
         nonce = os.urandom(12)
@@ -80,6 +110,9 @@ class EncryptionManager:
                 os.chmod(self.key_file, 0o600)
             except Exception:
                 pass
+
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
 
     def encrypt(self, data: str) -> str:
         if not self.aesgcm: return data # Return plaintext if locked (should not happen in normal flow)
@@ -107,7 +140,7 @@ class EncryptionManager:
             return "[Decryption Failed]"
 
 class Database:
-    def __init__(self, password, db_name="lan_messenger.db", key_file=".master.key"):
+    def __init__(self, password=None, db_name="lan_messenger.db", key_file=".master.key"):
         self.conn = sqlite3.connect(db_name, check_same_thread=False)
         self.lock = threading.Lock()
         self.cipher = EncryptionManager(password=password, key_file=key_file)
@@ -115,16 +148,22 @@ class Database:
         self.create_tables()
 
     def is_locked(self) -> bool:
+        """Check if the database is currently locked."""
         return self.cipher.is_locked()
 
     def needs_setup(self) -> bool:
-        return self.cipher.needs_setup()
+        """Check if the master key needs to be set up."""
+        return not os.path.exists(self.cipher.key_file)
 
     def setup(self, password: str):
-        self.cipher.setup(password)
+        self.cipher.unlock(password) # unlock will create key if not exist
 
     def unlock(self, password: str) -> bool:
-        return self.cipher.unlock(password)
+        try:
+            self.cipher.unlock(password)
+            return True
+        except Exception:
+            return False
 
     def lock_db(self):
         self.cipher.lock()
@@ -220,18 +259,52 @@ class Database:
             if 'can_download_files' not in tp_columns:
                 cursor.execute("ALTER TABLE trusted_peers ADD COLUMN can_download_files BOOLEAN DEFAULT 1")
 
-            # Audit Logs table: id, event_type, details, timestamp
+            # Audit Logs table: id, event_type, details, timestamp, ip_address
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_type TEXT NOT NULL,
                     details TEXT,
-                    timestamp REAL NOT NULL
+                    timestamp REAL NOT NULL,
+                    ip_address TEXT
                 )
             """)
+            # Migration: add ip_address column if it doesn't exist
+            cursor.execute("PRAGMA table_info(audit_logs)")
+            audit_columns = [info[1] for info in cursor.fetchall()]
+            if 'ip_address' not in audit_columns:
+                cursor.execute("ALTER TABLE audit_logs ADD COLUMN ip_address TEXT")
+
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_ip ON audit_logs(ip_address)")
+
+            # App Config table: key, value
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS app_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
 
             self.conn.commit()
+
+    def set_config(self, key: str, value: str, encrypt: bool = False):
+        if encrypt and value:
+            value = self.cipher.encrypt(value)
+        with self.lock:
+            with self.conn:
+                self.conn.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, value))
+
+    def get_config(self, key: str, decrypt: bool = False) -> str:
+        with self.lock:
+            cursor = self.conn.execute("SELECT value FROM app_config WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            value = row[0]
+            if decrypt and value:
+                return self.cipher.decrypt(value)
+            return value
 
     def add_message(self, sender: str, content: str, recipient: str = None, ttl: int = None) -> str:
         msg_id = str(uuid.uuid4())
@@ -368,6 +441,8 @@ class Database:
                         INSERT INTO trusted_peers (ip, username, fingerprint, trust_level, last_seen)
                         VALUES (?, ?, ?, ?, ?)
                     """, (ip, username, fingerprint, final_trust, now))
+            # Invalidate the permissions cache within the lock
+            self._get_peer_permissions_internal.cache_clear()
 
     def get_trusted_peer(self, ip: str) -> Tuple:
         with self.lock:
@@ -377,21 +452,35 @@ class Database:
             """, (ip,))
             return cursor.fetchone()
 
+    @functools.lru_cache(maxsize=128)
+    def _get_peer_permissions_internal(self, ip: str) -> tuple:
+        """Internal cached helper for permission lookups. Returns an immutable tuple."""
+        with self.lock:
+            cursor = self.conn.execute("""
+                SELECT can_chat, can_list_files, can_download_files, is_blocked, is_verified
+                FROM trusted_peers WHERE ip = ?
+            """, (ip,))
+            row = cursor.fetchone()
+            # Default permissions if peer is unknown
+            return row if row else (1, 1, 1, 0, 0)
+
     def get_peer_permissions(self, ip: str) -> dict:
-        peer = self.get_trusted_peer(ip)
-        if not peer:
-            return {'is_blocked': 0, 'can_chat': 1, 'can_list_files': 1, 'can_download_files': 1, 'is_verified': 0}
+        """Fetch peer permissions using a cache and returning a dictionary."""
+        # Using a cached internal helper that returns a tuple (immutable)
+        p = self._get_peer_permissions_internal(ip)
         return {
-            'is_blocked': peer[4],
-            'can_chat': peer[5],
-            'can_list_files': peer[6],
-            'can_download_files': peer[7],
-            'is_verified': peer[9]
+            'can_chat': bool(p[0]),
+            'can_list_files': bool(p[1]),
+            'can_download_files': bool(p[2]),
+            'is_blocked': bool(p[3]),
+            'is_verified': bool(p[4])
         }
 
     def update_peer_permissions(self, ip: str, permissions: dict):
         with self.lock:
             with self.conn:
+                # Ensure peer exists
+                self.conn.execute("INSERT OR IGNORE INTO trusted_peers (ip, username) VALUES (?, ?)", (ip, "Unknown"))
                 self.conn.execute("""
                     UPDATE trusted_peers
                     SET is_blocked = ?, can_chat = ?, can_list_files = ?, can_download_files = ?, is_verified = ?
@@ -404,6 +493,18 @@ class Database:
                     permissions.get('is_verified', 0),
                     ip
                 ))
+            # Invalidate the permissions cache within the lock
+            self._get_peer_permissions_internal.cache_clear()
+
+    def get_blocked_peers(self) -> List[Tuple]:
+        with self.lock:
+            cursor = self.conn.execute("SELECT ip, username FROM trusted_peers WHERE is_blocked = 1")
+            return cursor.fetchall()
+
+    def unblock_peer(self, ip: str):
+        with self.lock:
+            with self.conn:
+                self.conn.execute("UPDATE trusted_peers SET is_blocked = 0 WHERE ip = ?", (ip,))
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         if not ips: return {}
@@ -436,20 +537,31 @@ class Database:
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET trust_level = ? WHERE ip = ?", (trust_level, ip))
 
-    def add_audit_log(self, event_type: str, details: str):
+    def add_audit_log(self, event_type: str, details: str, ip_address: str = None):
         timestamp = time.time()
         with self.lock:
             try:
                 with self.conn:
-                    self.conn.execute("INSERT INTO audit_logs (event_type, details, timestamp) VALUES (?, ?, ?)",
-                                     (event_type, details, timestamp))
+                    self.conn.execute("INSERT INTO audit_logs (event_type, details, timestamp, ip_address) VALUES (?, ?, ?, ?)",
+                                     (event_type, details, timestamp, ip_address))
             except Exception as e:
                 print(f"[DEBUG] Failed to add audit log to DB: {e}")
 
     def get_audit_logs(self, limit=100) -> List[Tuple]:
         with self.lock:
-            cursor = self.conn.execute("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT ?", (limit,))
+            cursor = self.conn.execute("SELECT id, event_type, details, timestamp, ip_address FROM audit_logs ORDER BY timestamp DESC LIMIT ?", (limit,))
             return cursor.fetchall()
+
+    def get_incident_count(self, ip: str, timeframe_seconds: int) -> int:
+        since = time.time() - timeframe_seconds
+        # Suspicious events that contribute to auto-blocking
+        suspicious_events = ('AUTH_FAILURE', 'SECURITY_ALERT', 'UNAUTHORIZED_ACCESS', 'PROTOCOL_VIOLATION')
+        placeholders = ",".join(["?"] * len(suspicious_events))
+        query = f"SELECT COUNT(*) FROM audit_logs WHERE ip_address = ? AND timestamp > ? AND event_type IN ({placeholders})"
+        params = (ip, since) + suspicious_events
+        with self.lock:
+            cursor = self.conn.execute(query, params)
+            return cursor.fetchone()[0]
 
     def reap_expired_messages(self) -> int:
         return self.delete_expired_messages()
@@ -502,17 +614,3 @@ class Database:
     def close(self):
         self.conn.close()
 
-    def get_peers_permissions(self, ips: List[str]) -> dict:
-        """Batch fetch permissions for multiple IPs."""
-        ips_list = list(ips)
-        if not ips_list:
-            return {}
-        placeholders = ",".join(["?"] * len(ips_list))
-        with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
-            return {row[0]: {
-                'can_chat': bool(row[1]),
-                'can_list_files': bool(row[2]),
-                'can_download_files': bool(row[3]),
-                'is_blocked': bool(row[4])
-            } for row in cursor.fetchall()}

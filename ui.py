@@ -9,6 +9,7 @@ import shutil
 import json
 import audit
 import ssl_utils
+import security_engine
 from concurrent.futures import ThreadPoolExecutor
 from db import Database
 from network import NetworkManager, DiscoveryManager
@@ -110,15 +111,12 @@ class PeerSecurityDialog(ctk.CTkToplevel):
         peer_fp = self.peer_info[2] if self.peer_info else None
         safety_number = ssl_utils.get_safety_number(my_fp, peer_fp)
 
-        sn_display_frame = ctk.CTkFrame(sn_frame, fg_color="transparent")
-        sn_display_frame.pack(pady=5)
+        sn_display = ctk.CTkLabel(sn_frame, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
+        sn_display.pack(pady=5)
 
-        self.safety_number = safety_number
-        sn_display = ctk.CTkLabel(sn_display_frame, text=safety_number, font=("Courier", 14), text_color="#3B8ED0")
-        sn_display.pack(side="left", padx=(10, 5))
-
-        self.copy_sn_btn = ctk.CTkButton(sn_display_frame, text="Copy", width=60, height=20, command=self.copy_safety_number)
-        self.copy_sn_btn.pack(side="left", padx=(5, 10))
+        self.copy_sn_btn = ctk.CTkButton(sn_frame, text="Copy", width=60, height=20,
+                                        command=lambda: self.copy_safety_number(safety_number))
+        self.copy_sn_btn.pack(pady=5)
 
         ctk.CTkLabel(sn_frame, text="Verify this code with the peer out-of-band.", font=("Arial", 10, "italic")).pack(pady=(0, 10))
 
@@ -156,10 +154,11 @@ class PeerSecurityDialog(ctk.CTkToplevel):
         ctk.CTkButton(btn_frame, text="Cancel", width=100, fg_color="gray", command=self.destroy).pack(side="left", padx=10)
         ctk.CTkButton(btn_frame, text="Save", width=100, command=self.save).pack(side="left", padx=10)
 
-    def copy_safety_number(self):
+    def copy_safety_number(self, number):
         self.clipboard_clear()
-        self.clipboard_append(self.safety_number)
+        self.clipboard_append(number)
         self.copy_sn_btn.configure(text="Copied!", fg_color="#2ecc71")
+
         def reset():
             if self.copy_sn_btn.winfo_exists():
                 self.copy_sn_btn.configure(text="Copy", fg_color=("#3B8ED0", "#1F6AA5"))
@@ -183,6 +182,69 @@ class PeerSecurityDialog(ctk.CTkToplevel):
         elif hasattr(self.master, 'refresh_peers'):
             self.master.refresh_peers()
         self.destroy()
+
+class MFASetupDialog(ctk.CTkToplevel):
+    def __init__(self, parent, db, on_complete_cb=None):
+        super().__init__(parent)
+        self.title("MFA Setup")
+        self.geometry("450x650")
+        self.db = db
+        self.on_complete_cb = on_complete_cb
+        self.secret = pyotp.random_base32()
+        self.logger = audit.get_logger()
+
+        self.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(self, text="Multi-Factor Authentication Setup", font=("Arial", 20, "bold")).grid(row=0, column=0, pady=20)
+        ctk.CTkLabel(self, text="1. Scan the QR code with your Authenticator app", font=("Arial", 12)).grid(row=1, column=0, pady=10)
+
+        # Generate QR Code
+        totp_uri = pyotp.totp.TOTP(self.secret).provisioning_uri(name="User", issuer_name="LAN Messenger")
+        qr = qrcode.QRCode(version=1, box_size=5, border=2)
+        qr.add_data(totp_uri)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+
+        # Convert to PhotoImage
+        self.qr_photo = ImageTk.PhotoImage(qr_img)
+        self.qr_label = ctk.CTkLabel(self, image=self.qr_photo, text="")
+        self.qr_label.grid(row=2, column=0, pady=10)
+
+        ctk.CTkLabel(self, text=f"Secret Key: {self.secret}", font=("Courier", 12)).grid(row=3, column=0, pady=5)
+
+        ctk.CTkLabel(self, text="2. Enter the 6-digit code to verify", font=("Arial", 12)).grid(row=4, column=0, pady=(20, 5))
+        self.verify_entry = ctk.CTkEntry(self, placeholder_text="000000", width=150)
+        self.verify_entry.grid(row=5, column=0, pady=5)
+        self.verify_entry.bind("<Return>", lambda e: self.verify_and_save())
+
+        self.status_label = ctk.CTkLabel(self, text="")
+        self.status_label.grid(row=6, column=0, pady=5)
+
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_frame.grid(row=7, column=0, pady=20)
+
+        ctk.CTkButton(self.btn_frame, text="Cancel", fg_color="gray", command=self.destroy).pack(side="left", padx=10)
+        self.save_btn = ctk.CTkButton(self.btn_frame, text="Verify & Enable", command=self.verify_and_save)
+        self.save_btn.pack(side="left", padx=10)
+
+        self.transient(parent)
+        self.grab_set()
+
+    def verify_and_save(self):
+        code = self.verify_entry.get().strip()
+        totp = pyotp.TOTP(self.secret)
+        if totp.verify(code):
+            self.db.set_config("mfa_secret", self.secret, encrypt=True)
+            self.db.set_config("mfa_enabled", "1")
+            if self.logger:
+                self.logger.log("MFA_ENABLED", "TOTP Multi-Factor Authentication enabled.")
+            messagebox.showinfo("Success", "MFA has been successfully enabled!")
+            if self.on_complete_cb:
+                self.on_complete_cb()
+            self.destroy()
+        else:
+            self.status_label.configure(text="Invalid code. Please try again.", text_color="red")
+            self.verify_entry.delete(0, "end")
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -287,6 +349,13 @@ class LockScreen(ctk.CTkFrame):
         self.password_entry.pack(pady=10, padx=40)
         self.password_entry.bind("<Return>", lambda e: self.attempt_unlock())
 
+        # MFA Entry (Initially hidden)
+        self.mfa_entry = ctk.CTkEntry(inner_frame, width=250, placeholder_text="TOTP Code (6-digits)")
+        self.mfa_enabled = self.db.get_config("mfa_enabled") == "1"
+        if self.mfa_enabled:
+            self.mfa_entry.pack(pady=10, padx=40)
+            self.mfa_entry.bind("<Return>", lambda e: self.attempt_unlock())
+
         self.btn = ctk.CTkButton(inner_frame, text="Unlock", command=self.attempt_unlock)
         self.btn.pack(pady=20)
 
@@ -309,9 +378,32 @@ class LockScreen(ctk.CTkFrame):
             self.destroy()
         else:
             if self.db.unlock(password):
-                audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked.")
-                self.on_unlock()
-                self.destroy()
+                # Check MFA if enabled
+                if self.mfa_enabled:
+                    mfa_code = self.mfa_entry.get().strip()
+                    mfa_secret = self.db.get_config("mfa_secret", decrypt=True)
+                    if not mfa_secret:
+                        # Fallback if secret is missing but enabled
+                        audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked (MFA Secret Missing).")
+                        self.on_unlock()
+                        self.destroy()
+                        return
+
+                    totp = pyotp.TOTP(mfa_secret)
+                    if totp.verify(mfa_code):
+                        audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked with MFA.")
+                        self.on_unlock()
+                        self.destroy()
+                    else:
+                        audit.get_logger().log("MFA_VERIFY_FAILURE", "Failed MFA verification attempt.")
+                        self.info_label.configure(text="Invalid TOTP Code! Try again.", text_color="red")
+                        self.mfa_entry.delete(0, "end")
+                        # Re-lock the DB because password was correct but MFA failed
+                        self.db.lock_db()
+                else:
+                    audit.get_logger().log("APP_UNLOCKED", "Application successfully unlocked.")
+                    self.on_unlock()
+                    self.destroy()
             else:
                 audit.get_logger().log("INVALID_PASSWORD_ATTEMPT", "Failed unlock attempt.")
                 self.info_label.configure(text="Invalid Password! Try again.", text_color="red")
@@ -361,6 +453,7 @@ class LANMessengerApp(ctk.CTk):
 
         audit.init_logger(self.db)
         self.logger = audit.get_logger()
+        security_engine.init_engine(self.db)
         self.logger.log("APP_START", f"Application started for user {self.username}")
 
         # Thread pool for non-blocking network calls
@@ -423,8 +516,6 @@ class LANMessengerApp(ctk.CTk):
         self.after(100, lambda: self.msg_entry.focus_set())
         self.bind("<Control-f>", self.focus_search)
         self.bind("<Control-F>", self.focus_search)
-        self.bind_all("<Any-KeyPress>", self.reset_inactivity)
-        self.bind_all("<Any-ButtonPress>", self.reset_inactivity)
 
         # Activity Tracking
         self.bind_all("<KeyPress>", self._update_activity)
@@ -583,6 +674,7 @@ class LANMessengerApp(ctk.CTk):
 
         self.chat_tab = self.tabview.add("Global Chat")
         self.files_tab = self.tabview.add("Files")
+        self.security_tab = self.tabview.add("Security")
         self.audit_tab = self.tabview.add("Audit Logs")
 
         # -- Chat Tab --
@@ -709,7 +801,29 @@ class LANMessengerApp(ctk.CTk):
         self.audit_controls.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
 
         self.refresh_audit_btn = ctk.CTkButton(self.audit_controls, text="Refresh Logs", command=self.refresh_audit_view)
-        self.refresh_audit_btn.pack(pady=5)
+        self.refresh_audit_btn.pack(side="left", padx=10, pady=5)
+
+        self.export_audit_btn = ctk.CTkButton(self.audit_controls, text="Export Logs (SOC 2)", command=self.export_audit_logs, fg_color="#34495e")
+        self.export_audit_btn.pack(side="right", padx=10, pady=5)
+
+        # -- Security Tab --
+        self.security_tab.grid_columnconfigure(0, weight=1)
+        self.security_tab.grid_rowconfigure(1, weight=1)
+
+        # Stats Header
+        self.sec_stats_frame = ctk.CTkFrame(self.security_tab)
+        self.sec_stats_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        self.sec_stats_frame.grid_columnconfigure((0, 1), weight=1)
+
+        self.threat_label = ctk.CTkLabel(self.sec_stats_frame, text="Total Threats Intercepted: 0", font=("Arial", 14, "bold"))
+        self.threat_label.grid(row=0, column=0, pady=10)
+
+        self.block_label = ctk.CTkLabel(self.sec_stats_frame, text="Active IP Blocks: 0", font=("Arial", 14, "bold"))
+        self.block_label.grid(row=0, column=1, pady=10)
+
+        # Blocked Peers List
+        self.blocked_scroll = ctk.CTkScrollableFrame(self.security_tab, label_text="Currently Blocked Peers")
+        self.blocked_scroll.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
 
     def refresh_audit_view(self):
         """Refreshes audit logs with non-blocking success feedback."""
@@ -719,6 +833,21 @@ class LANMessengerApp(ctk.CTk):
             if self.refresh_audit_btn.winfo_exists():
                 self.refresh_audit_btn.configure(text="Refresh Logs", fg_color=("#3B8ED0", "#1F6AA5"))
         self.after(2000, reset)
+
+    def export_audit_logs(self):
+        logs = self.db.get_audit_logs(1000)
+        try:
+            with open("audit_export.txt", "w", encoding="utf-8") as f:
+                f.write("LAN Messenger Security Audit Log Export\n")
+                f.write("======================================\n")
+                for log in logs:
+                    ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(log[3]))
+                    ip = log[4] or "N/A"
+                    f.write(f"[{ts}] [{ip}] {log[1]}: {log[2]}\n")
+            messagebox.showinfo("Export Successful", "Audit logs exported to audit_export.txt")
+            self.logger.log("AUDIT_EXPORT", "Audit logs exported to file.")
+        except Exception as e:
+            messagebox.showerror("Export Failed", f"Could not export logs: {e}")
 
     def load_audit_logs(self):
         if not self.winfo_exists() or self.tabview.get() != "Audit Logs":
@@ -919,6 +1048,40 @@ class LANMessengerApp(ctk.CTk):
                 self.after(2000, lambda: btn.configure(text="Connect", fg_color=("#3B8ED0", "#1F6AA5")) if btn.winfo_exists() else None)
         self.after(0, update_ui)
 
+    def refresh_security_dashboard(self):
+        if not self.winfo_exists() or self.tabview.get() != "Security":
+            return
+
+        # Update Stats
+        logs = self.db.get_audit_logs(1000)
+        suspicious = [l for l in logs if l[1] in ('AUTH_FAILURE', 'SECURITY_ALERT', 'UNAUTHORIZED_ACCESS', 'PROTOCOL_VIOLATION', 'IPS_AUTO_BLOCK')]
+        self.threat_label.configure(text=f"Total Threats Intercepted: {len(suspicious)}")
+
+        blocked = self.db.get_blocked_peers()
+        self.block_label.configure(text=f"Active IP Blocks: {len(blocked)}")
+
+        # Update List
+        for widget in self.blocked_scroll.winfo_children():
+            widget.destroy()
+
+        if not blocked:
+             lbl = ctk.CTkLabel(self.blocked_scroll, text="No active IP blocks.", font=("Arial", 12, "italic"), text_color="gray")
+             lbl.pack(pady=40)
+        else:
+            for ip, name in blocked:
+                row = ctk.CTkFrame(self.blocked_scroll)
+                row.pack(fill="x", pady=2, padx=5)
+
+                ctk.CTkLabel(row, text=f"{name} ({ip})").pack(side="left", padx=10)
+                ctk.CTkButton(row, text="Unblock", width=80, height=24, fg_color="#27ae60", hover_color="#2ecc71",
+                               command=lambda i=ip: self.unblock_ip_action(i)).pack(side="right", padx=10, pady=5)
+
+    def unblock_ip_action(self, ip):
+        self.db.unblock_peer(ip)
+        self.logger.log("SECURITY_POLICY_CHANGE", f"Manually unblocked IP: {ip}")
+        self.refresh_security_dashboard()
+        self.refresh_peers()
+
     def on_tab_change(self):
         tab = self.tabview.get()
         if tab == "Global Chat":
@@ -926,6 +1089,8 @@ class LANMessengerApp(ctk.CTk):
             self.load_chat_history(debounce=False)
         elif tab == "Audit Logs":
             self.load_audit_logs()
+        elif tab == "Security":
+            self.refresh_security_dashboard()
         elif tab.startswith("Chat: "):
             peer_ip = self.private_chat_tabs.get(tab)
             if peer_ip:
@@ -1439,18 +1604,65 @@ class LANMessengerApp(ctk.CTk):
     def open_settings(self):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Settings")
-        dialog.geometry("400x320")
+        dialog.geometry("500x550")
         dialog.transient(self)
 
-        ctk.CTkLabel(dialog, text="Chat Port (TCP):").pack(pady=(10, 0))
-        entry_chat = ctk.CTkEntry(dialog)
+        # Tabview for settings
+        st_tabs = ctk.CTkTabview(dialog)
+        st_tabs.pack(fill="both", expand=True, padx=10, pady=10)
+
+        gen_tab = st_tabs.add("General")
+        sec_tab = st_tabs.add("Security")
+
+        # -- General Tab --
+        ctk.CTkLabel(gen_tab, text="Chat Port (TCP):").pack(pady=(10, 0))
+        entry_chat = ctk.CTkEntry(gen_tab)
         entry_chat.insert(0, str(self.settings["tcp_chat_port"]))
         entry_chat.pack(pady=5)
 
-        ctk.CTkLabel(dialog, text="File Port (TCP):").pack(pady=(10, 0))
-        entry_file = ctk.CTkEntry(dialog)
+        ctk.CTkLabel(gen_tab, text="File Port (TCP):").pack(pady=(10, 0))
+        entry_file = ctk.CTkEntry(gen_tab)
         entry_file.insert(0, str(self.settings["tcp_file_port"]))
         entry_file.pack(pady=5)
+
+        # -- Security Tab --
+        ctk.CTkLabel(sec_tab, text="Multi-Factor Authentication (MFA)", font=("Arial", 14, "bold")).pack(pady=10)
+
+        mfa_status = "Enabled" if self.db.get_config("mfa_enabled") == "1" else "Disabled"
+        status_lbl = ctk.CTkLabel(sec_tab, text=f"Status: {mfa_status}")
+        status_lbl.pack(pady=5)
+
+        def toggle_mfa():
+            if self.db.get_config("mfa_enabled") == "1":
+                # Disable MFA (needs confirmation/password)
+                if messagebox.askyesno("Disable MFA", "Are you sure you want to disable Multi-Factor Authentication?"):
+                    # Request master password for critical action
+                    pw_dialog = PasswordDialog(dialog, title="Verify Master Password")
+                    if pw_dialog.result:
+                        # Try to unlock with this password to verify
+                        temp_db_mgr = self.db.cipher # Just use existing cipher state
+                        # Since db is already unlocked, we can just check if password is correct by trying to re-unlock
+                        # or better, check against the master password provided at startup.
+                        if pw_dialog.result == self._master_password:
+                            self.db.set_config("mfa_enabled", "0")
+                            self.db.set_config("mfa_secret", None)
+                            self.logger.log("MFA_DISABLED", "TOTP Multi-Factor Authentication disabled.")
+                            status_lbl.configure(text="Status: Disabled")
+                            mfa_btn.configure(text="Enable MFA", fg_color=("#3B8ED0", "#1F6AA5"))
+                            messagebox.showinfo("Success", "MFA has been disabled.")
+                        else:
+                            messagebox.showerror("Error", "Incorrect Master Password.")
+            else:
+                # Enable MFA
+                MFASetupDialog(dialog, self.db, on_complete_cb=lambda: [
+                    status_lbl.configure(text="Status: Enabled"),
+                    mfa_btn.configure(text="Disable MFA", fg_color="#e74c3c")
+                ])
+
+        mfa_btn_text = "Disable MFA" if mfa_status == "Enabled" else "Enable MFA"
+        mfa_btn_color = "#e74c3c" if mfa_status == "Enabled" else ("#3B8ED0", "#1F6AA5")
+        mfa_btn = ctk.CTkButton(sec_tab, text=mfa_btn_text, fg_color=mfa_btn_color, command=toggle_mfa)
+        mfa_btn.pack(pady=20)
 
         def save(event=None):
             try:
@@ -1465,7 +1677,7 @@ class LANMessengerApp(ctk.CTk):
 
         entry_chat.bind("<Return>", save)
         entry_file.bind("<Return>", save)
-        save_btn = ctk.CTkButton(dialog, text="Save & Restart", command=save, fg_color="green")
+        save_btn = ctk.CTkButton(gen_tab, text="Save & Restart", command=save, fg_color="green")
         save_btn.pack(pady=20)
         self.after(200, lambda: entry_chat.focus_set())
 
