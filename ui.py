@@ -729,7 +729,7 @@ class LANMessengerApp(ctk.CTk):
     def export_audit_logs(self):
         logs = self.db.get_audit_logs(1000)
         try:
-            with open("audit_export.txt", "w") as f:
+            with open("audit_export.txt", "w", encoding="utf-8") as f:
                 f.write("LAN Messenger Security Audit Log Export\n")
                 f.write("======================================\n")
                 for log in logs:
