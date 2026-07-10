@@ -6,6 +6,7 @@ import struct
 import hashlib
 import os
 import base64
+import security_engine
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from ssl_utils import wrap_socket, get_cert_fingerprint, get_peer_fingerprint
@@ -287,6 +288,8 @@ class NetworkManager:
         if not audit.get_logger():
              audit.init_logger(self.db)
         logger = audit.get_logger()
+        engine = security_engine.get_engine()
+
         try:
             client.settimeout(10)
 
@@ -295,7 +298,7 @@ class NetworkManager:
             if perms.get('is_blocked'):
                 msg = f"Connection from {addr[0]} rejected: Peer is blocked."
                 print(f"[DEBUG] {msg}")
-                if logger: logger.log("SECURITY_ALERT", msg)
+                if engine: engine.report_incident(addr[0], "UNAUTHORIZED_ACCESS", msg)
                 self._send_json(client, {'status': 'ERR', 'msg': 'Access denied: Blocked'})
                 return
 
@@ -303,16 +306,18 @@ class NetworkManager:
             if self.allowed_ips is not None and addr[0] not in self.allowed_ips:
                 msg = f"Connection from {addr[0]} rejected: IP not allowed."
                 print(f"[DEBUG] {msg}")
-                if logger: logger.log("SECURITY_ALERT", msg)
+                if engine: engine.report_incident(addr[0], "UNAUTHORIZED_ACCESS", msg)
                 self._send_json(client, {'status': 'ERR', 'msg': 'IP not allowed'})
                 return
 
             data = self._recv_json(client)
-            if not data:
+            if data is None:
+                # If we received nothing or decryption failed
+                if engine: engine.report_incident(addr[0], "PROTOCOL_VIOLATION", f"Decryption failed or malformed packet from {addr[0]}")
                 return
 
             if not isinstance(data, dict):
-                if logger: logger.log("SECURITY_ALERT", f"Malformed packet from {addr[0]}: Not a JSON object.")
+                if engine: engine.report_incident(addr[0], "PROTOCOL_VIOLATION", f"Malformed packet from {addr[0]}: Not a JSON object.")
                 return
 
             print(f"[DEBUG] Received data from {addr}: {data}")
@@ -322,7 +327,7 @@ class NetworkManager:
                 if data.get('token') != self.auth_token:
                     msg = f"Connection from {addr[0]} rejected: Authentication failed."
                     print(f"[DEBUG] {msg}")
-                    if logger: logger.log("AUTH_FAILURE", msg)
+                    if engine: engine.report_incident(addr[0], "AUTH_FAILURE", msg)
                     self._send_json(client, {'status': 'ERR', 'msg': 'Authentication failed'})
                     return
 

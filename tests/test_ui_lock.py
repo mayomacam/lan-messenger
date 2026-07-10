@@ -19,21 +19,19 @@ import ui
 class TestUILockLogic(unittest.TestCase):
     def setUp(self):
         self.db_file = "test_ui_lock.db"
+        self.key_file = ".test_master.key"
         if os.path.exists(self.db_file):
             os.remove(self.db_file)
-        # Force remove .test_master.key to ensure clean state
-        if os.path.exists(".test_master.key"):
-            os.remove(".test_master.key")
-        from db import EncryptionManager
-        EncryptionManager.__init__.__defaults__ = (".test_master.key",)
-        self.db = Database(self.db_file)
+        if os.path.exists(self.key_file):
+            os.remove(self.key_file)
+        self.db = Database(db_name=self.db_file, key_file=self.key_file)
 
     def tearDown(self):
         self.db.close()
         if os.path.exists(self.db_file):
             os.remove(self.db_file)
-        if os.path.exists(".master.key"):
-            os.remove(".master.key")
+        if os.path.exists(self.key_file):
+            os.remove(self.key_file)
 
     def test_lock_screen_setup_flow(self):
         parent = MagicMock()
