@@ -81,6 +81,16 @@ class EncryptionManager:
 
         self.aesgcm = AESGCM(self.key)
 
+    def lock(self):
+        self.key = None
+        self.aesgcm = None
+
+    def is_locked(self) -> bool:
+        return self.aesgcm is None
+
+    def needs_setup(self) -> bool:
+        return not os.path.exists(self.key_file)
+
     def _save_encrypted_key(self, password: str, key: bytes):
         salt = os.urandom(16)
         nonce = os.urandom(12)
@@ -268,7 +278,33 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_ip ON audit_logs(ip_address)")
 
+            # App Config table: key, value
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS app_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+
             self.conn.commit()
+
+    def set_config(self, key: str, value: str, encrypt: bool = False):
+        if encrypt and value:
+            value = self.cipher.encrypt(value)
+        with self.lock:
+            with self.conn:
+                self.conn.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, value))
+
+    def get_config(self, key: str, decrypt: bool = False) -> str:
+        with self.lock:
+            cursor = self.conn.execute("SELECT value FROM app_config WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            value = row[0]
+            if decrypt and value:
+                return self.cipher.decrypt(value)
+            return value
 
     def add_message(self, sender: str, content: str, recipient: str = None, ttl: int = None) -> str:
         msg_id = str(uuid.uuid4())
