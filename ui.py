@@ -7,9 +7,6 @@ import threading
 import time
 import shutil
 import json
-import pyotp
-import qrcode
-from PIL import Image, ImageTk
 import audit
 import ssl_utils
 import security_engine
@@ -232,8 +229,6 @@ class MFASetupDialog(ctk.CTkToplevel):
 
         self.transient(parent)
         self.grab_set()
-        self.bind("<Escape>", lambda e: self.destroy())
-        self.after(100, lambda: self.verify_entry.focus_set())
 
     def verify_and_save(self):
         code = self.verify_entry.get().strip()
@@ -1613,7 +1608,6 @@ class LANMessengerApp(ctk.CTk):
         dialog.title("Settings")
         dialog.geometry("500x550")
         dialog.transient(self)
-        dialog.bind("<Escape>", lambda e: dialog.destroy())
 
         # Tabview for settings
         st_tabs = ctk.CTkTabview(dialog)

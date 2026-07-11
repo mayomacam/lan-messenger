@@ -33,7 +33,3 @@
 ## 2026-06-19 - Visual confirmation for background actions
 **Learning:** For actions that happen "behind the scenes" (like sharing a file or refreshing a log), users often feel uncertain if the action was actually registered. Replacing a static button label with temporary success feedback (e.g., "Shared!" or "Refreshed") provides immediate, non-disruptive confirmation.
 **Action:** Use temporary button label and color transitions (e.g., green '#2ecc71') to confirm successful asynchronous or background operations.
-
-## 2026-07-11 - Standardizing Dialog Accessibility and Scannability
-**Learning:** In applications with multiple configuration and security modals, inconsistent keyboard support (like missing Escape key bindings) and lack of automatic focus on primary inputs create significant friction. Furthermore, uniform chat text without visual hierarchy (e.g., bolding senders) makes it difficult for users to scan conversations quickly.
-**Action:** Always ensure all CTkToplevel dialogs have an <Escape> binding for dismissal and use `self.after(100, ...)` to focus the primary input field. Implement semantic text tagging for timestamps and senders in all chat-like displays to improve scannability.
