@@ -7,6 +7,9 @@ import threading
 import time
 import shutil
 import json
+import pyotp
+import qrcode
+from PIL import Image, ImageTk
 import audit
 import ssl_utils
 import security_engine
