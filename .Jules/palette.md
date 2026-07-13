@@ -5,3 +5,7 @@
 ## 2025-05-20 - Global hotkeys and dialog accessibility
 **Learning:** Adding standard global hotkeys like <Control-f> for search and ensuring all modal dialogs are dismissible via the <Escape> key significantly improves the efficiency for power users and keyboard accessibility.
 **Action:** Always include a global search shortcut and bind <Escape> to 'destroy' in all CTkToplevel dialogs.
+
+## 2026-07-13 - Interactive MFA Setup and Clipboard Integration
+**Learning:** For security setup flows like MFA, providing a one-click "Copy" button for the secret key (complementing the QR code) reduces user friction for those using desktop-based authenticators. Using 'self.after' for temporary visual feedback ("Copied!") provides non-disruptive confirmation.
+**Action:** Always include a 'Copy' button for critical security strings and use temporary color/label shifts to confirm success.
