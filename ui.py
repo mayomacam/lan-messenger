@@ -7,6 +7,9 @@ import threading
 import time
 import shutil
 import json
+import pyotp
+import qrcode
+from PIL import ImageTk
 import audit
 import ssl_utils
 import security_engine
@@ -210,7 +213,11 @@ class MFASetupDialog(ctk.CTkToplevel):
         self.qr_label = ctk.CTkLabel(self, image=self.qr_photo, text="")
         self.qr_label.grid(row=2, column=0, pady=10)
 
-        ctk.CTkLabel(self, text=f"Secret Key: {self.secret}", font=("Courier", 12)).grid(row=3, column=0, pady=5)
+        secret_frame = ctk.CTkFrame(self, fg_color="transparent")
+        secret_frame.grid(row=3, column=0, pady=5)
+        ctk.CTkLabel(secret_frame, text=f"Secret Key: {self.secret}", font=("Courier", 12)).pack(side="left", padx=10)
+        self.copy_btn = ctk.CTkButton(secret_frame, text="Copy", width=60, height=20, command=self.copy_secret)
+        self.copy_btn.pack(side="left")
 
         ctk.CTkLabel(self, text="2. Enter the 6-digit code to verify", font=("Arial", 12)).grid(row=4, column=0, pady=(20, 5))
         self.verify_entry = ctk.CTkEntry(self, placeholder_text="000000", width=150)
@@ -229,6 +236,14 @@ class MFASetupDialog(ctk.CTkToplevel):
 
         self.transient(parent)
         self.grab_set()
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.after(100, lambda: self.verify_entry.focus_set())
+
+    def copy_secret(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.secret)
+        self.copy_btn.configure(text="Copied!", fg_color="#2ecc71")
+        self.after(2000, lambda: self.copy_btn.configure(text="Copy", fg_color=("#3B8ED0", "#1F6AA5")) if self.copy_btn.winfo_exists() else None)
 
     def verify_and_save(self):
         code = self.verify_entry.get().strip()

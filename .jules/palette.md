@@ -33,3 +33,7 @@
 ## 2026-06-19 - Visual confirmation for background actions
 **Learning:** For actions that happen "behind the scenes" (like sharing a file or refreshing a log), users often feel uncertain if the action was actually registered. Replacing a static button label with temporary success feedback (e.g., "Shared!" or "Refreshed") provides immediate, non-disruptive confirmation.
 **Action:** Use temporary button label and color transitions (e.g., green '#2ecc71') to confirm successful asynchronous or background operations.
+
+## 2026-07-13 - Interactive MFA Setup and Clipboard Integration
+**Learning:** For security setup flows like MFA, providing a one-click "Copy" button for the secret key (complementing the QR code) reduces user friction for those using desktop-based authenticators. Using 'self.after' for temporary visual feedback ("Copied!") provides non-disruptive confirmation.
+**Action:** Always include a 'Copy' button for critical security strings and use temporary color/label shifts to confirm success.
