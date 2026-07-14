@@ -3,3 +3,4 @@ pyinstaller
 cryptography
 pyotp
 qrcode
+Pillow
