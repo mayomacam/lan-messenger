@@ -10,6 +10,9 @@ import json
 import audit
 import ssl_utils
 import security_engine
+import pyotp
+import qrcode
+from PIL import ImageTk
 from concurrent.futures import ThreadPoolExecutor
 from db import Database
 from network import NetworkManager, DiscoveryManager
