@@ -9,7 +9,7 @@ def verify_ui_lock_logic():
     if os.path.exists(db_file): os.remove(db_file)
     if os.path.exists(".master.key"): os.remove(".master.key")
 
-    db = Database(db_file)
+    db = Database(db_name=db_file)
 
     print("Step 1: Check initial state")
     assert db.needs_setup() == True

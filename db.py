@@ -25,6 +25,7 @@ class EncryptionManager:
     def lock(self):
         self.key = None
         self.aesgcm = None
+        self.decrypt.cache_clear()
 
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         kdf = PBKDF2HMAC(
@@ -35,11 +36,6 @@ class EncryptionManager:
             backend=default_backend()
         )
         return kdf.derive(password.encode())
-
-    def lock(self):
-        self.aesgcm = None
-        self.key = None
-        self.decrypt.cache_clear()
 
     def needs_setup(self) -> bool:
         return not os.path.exists(self.key_file)
@@ -81,16 +77,6 @@ class EncryptionManager:
 
         self.aesgcm = AESGCM(self.key)
 
-    def lock(self):
-        self.key = None
-        self.aesgcm = None
-
-    def is_locked(self) -> bool:
-        return self.aesgcm is None
-
-    def needs_setup(self) -> bool:
-        return not os.path.exists(self.key_file)
-
     def _save_encrypted_key(self, password: str, key: bytes):
         salt = os.urandom(16)
         nonce = os.urandom(12)
@@ -111,14 +97,9 @@ class EncryptionManager:
             except Exception:
                 pass
 
-    def is_locked(self) -> bool:
-        return self.aesgcm is None
-
     def encrypt(self, data: str) -> str:
         if not self.aesgcm: return data # Return plaintext if locked (should not happen in normal flow)
         if not data: return ""
-        if self.is_locked():
-            raise RuntimeError("Database is locked.")
         nonce = os.urandom(12)
         ciphertext = self.aesgcm.encrypt(nonce, data.encode(), None)
         return "enc:" + base64.b64encode(nonce + ciphertext).decode()
@@ -129,8 +110,6 @@ class EncryptionManager:
         if not encrypted_data: return ""
         if not encrypted_data.startswith("enc:"):
             return encrypted_data
-        if self.is_locked():
-            return "[Locked]"
         try:
             raw_data = base64.b64decode(encrypted_data[4:])
             nonce = raw_data[:12]
@@ -153,10 +132,10 @@ class Database:
 
     def needs_setup(self) -> bool:
         """Check if the master key needs to be set up."""
-        return not os.path.exists(self.cipher.key_file)
+        return self.cipher.needs_setup()
 
     def setup(self, password: str):
-        self.cipher.unlock(password) # unlock will create key if not exist
+        self.cipher.setup(password)
 
     def unlock(self, password: str) -> bool:
         try:
@@ -486,11 +465,11 @@ class Database:
                     SET is_blocked = ?, can_chat = ?, can_list_files = ?, can_download_files = ?, is_verified = ?
                     WHERE ip = ?
                 """, (
-                    permissions.get('is_blocked', 0),
-                    permissions.get('can_chat', 1),
-                    permissions.get('can_list_files', 1),
-                    permissions.get('can_download_files', 1),
-                    permissions.get('is_verified', 0),
+                    int(permissions.get('is_blocked', 0)),
+                    int(permissions.get('can_chat', 1)),
+                    int(permissions.get('can_list_files', 1)),
+                    int(permissions.get('can_download_files', 1)),
+                    int(permissions.get('is_verified', 0)),
                     ip
                 ))
             # Invalidate the permissions cache within the lock
@@ -505,22 +484,25 @@ class Database:
         with self.lock:
             with self.conn:
                 self.conn.execute("UPDATE trusted_peers SET is_blocked = 0 WHERE ip = ?", (ip,))
+            self._get_peer_permissions_internal.cache_clear()
 
     def get_peer_trust_levels(self, ips: List[str]) -> dict:
         if not ips: return {}
-        placeholders = ",".join(["?"] * len(ips))
+        ips_list = list(ips)
+        placeholders = ",".join(["?"] * len(ips_list))
         with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, trust_level FROM trusted_peers WHERE ip IN ({placeholders})", ips)
+            cursor = self.conn.execute(f"SELECT ip, trust_level FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
             return {row[0]: row[1] for row in cursor.fetchall()}
 
     def get_peers_permissions(self, ips: List[str]) -> dict:
         if not ips: return {}
-        placeholders = ",".join(["?"] * len(ips))
+        ips_list = list(ips)
+        placeholders = ",".join(["?"] * len(ips_list))
         with self.lock:
             cursor = self.conn.execute(f"""
                 SELECT ip, can_chat, can_list_files, can_download_files, is_blocked, is_verified
                 FROM trusted_peers WHERE ip IN ({placeholders})
-            """, ips)
+            """, ips_list)
             results = {}
             for row in cursor.fetchall():
                 results[row[0]] = {
@@ -566,51 +548,5 @@ class Database:
     def reap_expired_messages(self) -> int:
         return self.delete_expired_messages()
 
-    def get_peer_permissions(self, ip: str) -> dict:
-        """Returns a dictionary of peer permissions."""
-        with self.lock:
-            cursor = self.conn.execute("SELECT can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip = ?", (ip,))
-            row = cursor.fetchone()
-            if row:
-                return {
-                    'can_chat': bool(row[0]),
-                    'can_list_files': bool(row[1]),
-                    'can_download_files': bool(row[2]),
-                    'is_blocked': bool(row[3])
-                }
-            return {'can_chat': True, 'can_list_files': True, 'can_download_files': True, 'is_blocked': False}
-
-    def get_peers_permissions(self, ips: List[str]) -> dict:
-        """Batch fetch granular permissions for multiple IPs."""
-        ips_list = list(ips)
-        if not ips_list:
-            return {}
-        placeholders = ",".join(["?"] * len(ips_list))
-        with self.lock:
-            cursor = self.conn.execute(f"SELECT ip, can_chat, can_list_files, can_download_files, is_blocked FROM trusted_peers WHERE ip IN ({placeholders})", ips_list)
-            results = {}
-            for row in cursor.fetchall():
-                results[row[0]] = {
-                    'can_chat': bool(row[1]),
-                    'can_list_files': bool(row[2]),
-                    'can_download_files': bool(row[3]),
-                    'is_blocked': bool(row[4])
-                }
-            return results
-
-    def update_peer_permissions(self, ip: str, perms: dict):
-        """Update granular permissions for a peer."""
-        with self.lock:
-            with self.conn:
-                self.conn.execute("""
-                    UPDATE trusted_peers SET
-                        can_chat = ?, can_list_files = ?, can_download_files = ?, is_blocked = ?
-                    WHERE ip = ?
-                """, (int(perms.get('can_chat', True)),
-                      int(perms.get('can_list_files', True)),
-                      int(perms.get('can_download_files', True)),
-                      int(perms.get('is_blocked', False)), ip))
-
     def close(self):
         self.conn.close()
-

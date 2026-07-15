@@ -5,7 +5,7 @@ db_name = "test_verify.db"
 if os.path.exists(db_name):
     os.remove(db_name)
 
-db = Database(db_name)
+db = Database(db_name=db_name)
 cursor = db.conn.cursor()
 cursor.execute("PRAGMA table_info(trusted_peers)")
 columns = {info[1]: info for info in cursor.fetchall()}

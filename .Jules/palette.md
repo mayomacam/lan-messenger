@@ -5,3 +5,7 @@
 ## 2025-05-20 - Global hotkeys and dialog accessibility
 **Learning:** Adding standard global hotkeys like <Control-f> for search and ensuring all modal dialogs are dismissible via the <Escape> key significantly improves the efficiency for power users and keyboard accessibility.
 **Action:** Always include a global search shortcut and bind <Escape> to 'destroy' in all CTkToplevel dialogs.
+
+## 2026-06-21 - Defensive focus and reset patterns in Tkinter
+**Learning:** Using 'self.after' for delayed focus or button resets can cause runtime errors if the dialog or widget is destroyed before the timer expires. Wrapping these actions in a 'winfo_exists()' check ensures stability.
+**Action:** Always verify widget existence inside 'self.after' callbacks (e.g., 'lambda: entry.focus_set() if entry.winfo_exists() else None').
