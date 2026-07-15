@@ -15,7 +15,7 @@ class TestSecurityFeatures(unittest.TestCase):
         cls.db_name = "test_security_final.db"
         if os.path.exists(cls.db_name):
             os.remove(cls.db_name)
-        cls.db = Database(cls.db_name)
+        cls.db = Database(db_name=cls.db_name)
         audit.init_logger(cls.db)
 
         cls.chat_port = 12480
@@ -54,7 +54,10 @@ class TestSecurityFeatures(unittest.TestCase):
     def test_blocked_peer_chat(self):
         self.db.update_peer_permissions(self.peer_ip, {'is_blocked': 1})
         packet = {'type': 'MSG', 'sender': 'MaliciousPeer', 'content': 'Hello', 'id': '123'}
-        self._send_raw_json(self.chat_port, packet)
+        try:
+            self._send_raw_json(self.chat_port, packet)
+        except:
+            pass  # Pre-TLS rejection expected for blocked peer
         msgs = self.db.get_messages()
         self.assertFalse(any(m[2] == 'Hello' for m in msgs))
 
