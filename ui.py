@@ -7,6 +7,9 @@ import threading
 import time
 import shutil
 import json
+import pyotp
+import qrcode
+from PIL import Image, ImageTk
 import audit
 import ssl_utils
 import security_engine
@@ -611,6 +614,8 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display = ctk.CTkTextbox(self.chat_tab, state="disabled")
         self.chat_display.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         self.chat_display.tag_config("search_info", foreground="#3B8ED0")
+        self.chat_display.tag_config("timestamp", foreground="#888888")
+        self.chat_display.tag_config("sender", foreground="#3B8ED0", font=ctk.CTkFont(weight="bold"))
 
         self.input_frame = ctk.CTkFrame(self.chat_tab, height=50)
         self.input_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -1075,27 +1080,27 @@ class LANMessengerApp(ctk.CTk):
         self.chat_display.configure(state="normal")
         self.chat_display.delete("1.0", "end")
 
-        lines = []
+        found_messages = []
         for msg in messages:
-            sender = msg[1]
-            content = msg[2]
-
-            # Decrypted search
-            if query and query not in content.lower() and query not in sender.lower():
+            if query and query not in msg[2].lower() and query not in msg[1].lower():
                 continue
-
-            ts = time.strftime('%H:%M', time.localtime(msg[3]))
-            lines.append(f"[{ts}] {sender}: {content}")
+            found_messages.append(msg)
 
         if query:
-            if lines:
-                self.chat_display.insert("end", f"--- Found {len(lines)} results for '{query}' ---\n\n", "search_info")
+            if found_messages:
+                self.chat_display.insert("end", f"--- Found {len(found_messages)} results for '{query}' ---\n\n", "search_info")
             else:
                 self.chat_display.insert("end", f"--- No results found for '{query}' ---\n", "search_info")
 
-        if lines:
-            self.chat_display.insert("end", "\n".join(lines) + "\n")
-        elif query:
+        for msg in found_messages:
+            sender = msg[1]
+            content = msg[2]
+            ts = time.strftime('%H:%M', time.localtime(msg[3]))
+            self.chat_display.insert("end", f"[{ts}] ", "timestamp")
+            self.chat_display.insert("end", f"{sender}: ", "sender")
+            self.chat_display.insert("end", f"{content}\n")
+
+        if not found_messages and query:
             self.chat_display.insert("end", f"\n\nNo messages found matching '{query}'", "center")
         elif not messages:
             self.chat_display.insert("end", "\n\nNo messages yet. Say hello!", "center")
